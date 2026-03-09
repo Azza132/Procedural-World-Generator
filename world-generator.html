@@ -1,0 +1,2643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Procedural World Generator</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Share+Tech+Mono&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg:#0b0d0f; --panel-bg:#111418; --border:#2a3040;
+  --accent:#4ab3e8; --accent-dim:#1e5a7a;
+  --gold:#c9a84c;  --gold-dim:#7a5e20;
+  --green:#4caf76; --river:#4ab3e8;
+  --text:#cdd6e0;  --text-dim:#5a6878;
+  --fd:'Cinzel',serif; --fm:'Share Tech Mono',monospace;
+}
+
+html,body{width:100%;height:100%;background:var(--bg);color:var(--text);font-family:var(--fm);overflow:hidden}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.025) 2px,rgba(0,0,0,.025) 4px);pointer-events:none;z-index:999}
+
+#app{display:grid;grid-template-rows:auto 1fr auto;grid-template-columns:1fr 294px;grid-template-areas:"hdr hdr""cvs sb""ftr ftr";width:100vw;height:100vh}
+
+/* ── Header ── */
+#header{grid-area:hdr;display:flex;align-items:center;justify-content:space-between;padding:11px 22px;background:var(--panel-bg);border-bottom:1px solid var(--border);position:relative;overflow:hidden}
+#header::after{content:'';position:absolute;bottom:0;left:-100%;width:60%;height:1px;background:linear-gradient(90deg,transparent,var(--accent),transparent);animation:shimmer 4s linear infinite}
+@keyframes shimmer{0%{left:-60%}100%{left:140%}}
+.h-title h1{font-family:var(--fd);font-size:1.25rem;font-weight:900;letter-spacing:.12em;color:var(--accent);text-shadow:0 0 22px rgba(74,179,232,.45);line-height:1}
+.h-title .sub{font-size:.56rem;color:var(--text-dim);letter-spacing:.26em;text-transform:uppercase;margin-top:3px}
+.compass{width:42px;height:42px;opacity:.6;animation:rot 30s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+
+/* ── Canvas wrap ── */
+#cw{grid-area:cvs;position:relative;display:flex;background:#050709;overflow:hidden;cursor:grab}
+#cw.dragging{cursor:grabbing}
+#cw.no-data{cursor:default}
+#worldCanvas{display:block;position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges;z-index:1}
+#riverCanvas{display:block;position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2}
+#civCanvas{display:block;position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:3}
+#cw::after{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at center,transparent 52%,rgba(5,7,9,.65) 100%);pointer-events:none;z-index:5}
+
+/* HUD overlays */
+#coords{position:absolute;bottom:11px;left:13px;font-size:.6rem;color:rgba(74,179,232,.6);letter-spacing:.08em;pointer-events:none;z-index:10;max-width:70%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#mode-badge{position:absolute;top:9px;right:13px;font-size:.55rem;color:rgba(74,179,232,.42);letter-spacing:.16em;text-transform:uppercase;pointer-events:none;z-index:10}
+#zoom-badge{position:absolute;top:9px;left:13px;font-size:.55rem;color:rgba(74,179,232,.35);letter-spacing:.12em;pointer-events:none;z-index:10}
+#btn-reset-cam{position:absolute;top:32px;left:13px;font-size:.6rem;color:rgba(74,179,232,.45);letter-spacing:.1em;text-transform:uppercase;background:rgba(5,7,9,.55);border:1px solid rgba(74,179,232,.25);padding:3px 7px;cursor:pointer;z-index:10;transition:color .2s,border-color .2s;font-family:var(--fm)}
+#btn-reset-cam:hover{color:var(--accent);border-color:var(--accent-dim)}
+
+/* ── Minimap ── */
+#minimapCvs{position:absolute;bottom:38px;right:13px;z-index:10;border:1px solid rgba(74,179,232,.28);pointer-events:none;image-rendering:pixelated;opacity:0;transition:opacity .4s}
+#minimapCvs.ready{opacity:1}
+.mm-label{position:absolute;bottom:25px;right:13px;font-size:.42rem;color:rgba(74,179,232,.32);letter-spacing:.14em;text-transform:uppercase;pointer-events:none;z-index:10;text-align:right;width:150px}
+/* Grid view / road toggle button variants */
+.vis-btn.gd{border-color:rgba(74,179,232,.28);color:rgba(74,179,232,.5)}
+.vis-btn.gd:hover{border-color:rgba(74,179,232,.75);color:var(--accent)}
+.vis-btn.gd.on{border-color:rgba(74,179,232,.75);color:var(--accent);background:rgba(74,179,232,.07)}
+.vis-btn.rd2{border-color:rgba(190,148,70,.3);color:rgba(190,148,70,.55)}
+.vis-btn.rd2:hover{border-color:rgba(190,148,70,.8);color:rgba(220,180,80,1)}
+.vis-btn.rd2.off{opacity:.38}
+
+/* Loading overlay */
+#gen-overlay{position:absolute;inset:0;background:rgba(5,7,9,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:20;opacity:0;pointer-events:none;transition:opacity .2s ease}
+#gen-overlay.visible{opacity:1;pointer-events:all}
+.g-spin{width:48px;height:48px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite;margin-bottom:16px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.g-stage{font-family:var(--fd);font-size:.82rem;color:var(--accent);letter-spacing:.2em;margin-bottom:10px}
+.g-bar-wrap{width:200px;height:2px;background:var(--border)}
+.g-bar{height:100%;width:0%;background:linear-gradient(90deg,var(--accent-dim),var(--accent));transition:width .1s linear}
+
+/* ── Sidebar ── */
+#sb{grid-area:sb;background:var(--panel-bg);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden}
+#sb::-webkit-scrollbar{width:3px}
+#sb::-webkit-scrollbar-thumb{background:var(--border)}
+.panel{padding:15px 14px;border-bottom:1px solid var(--border)}
+.pt{font-family:var(--fd);font-size:.59rem;font-weight:700;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);margin-bottom:12px;display:flex;align-items:center;gap:7px}
+.pt::before{content:'';display:inline-block;width:13px;height:1px;background:var(--gold)}
+.pt.riv{color:var(--accent)} .pt.riv::before{background:var(--accent)}
+.pt.civ{color:var(--gold)} .pt.civ::before{background:var(--gold)}
+.pt.ins{color:#a0c8f0} .pt.ins::before{background:#a0c8f0}
+
+/* Buttons */
+#btn-gen{width:100%;padding:12px 0;font-family:var(--fd);font-size:.75rem;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:#050709;background:linear-gradient(135deg,var(--accent),#2a88c8);border:none;cursor:pointer;position:relative;overflow:hidden;transition:transform .1s,box-shadow .2s;clip-path:polygon(8px 0%,100% 0%,calc(100% - 8px) 100%,0% 100%)}
+#btn-gen:hover{box-shadow:0 0 22px rgba(74,179,232,.5);transform:translateY(-1px)}
+#btn-gen::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.18),transparent);transform:translateX(-100%);transition:transform .4s}
+#btn-gen:hover::after{transform:translateX(100%)}
+.trow{display:flex;gap:4px;margin-top:9px}
+.tbtn{flex:1;padding:5px 2px;font-family:var(--fm);font-size:.54rem;letter-spacing:.07em;text-transform:uppercase;background:transparent;border:1px solid var(--border);color:var(--text-dim);cursor:pointer;transition:all .2s}
+.tbtn:hover{border-color:var(--accent-dim);color:var(--accent)}
+.tbtn.active{border-color:var(--accent);color:var(--accent);background:rgba(74,179,232,.07)}
+.vis-btn{width:100%;padding:7px 0;margin-top:8px;font-family:var(--fm);font-size:.58rem;letter-spacing:.11em;text-transform:uppercase;background:transparent;cursor:pointer;transition:all .2s}
+.vis-btn.rv{border:1px solid var(--accent-dim);color:var(--accent)}
+.vis-btn.rv:hover{background:rgba(74,179,232,.08)}
+.vis-btn.cv{border:1px solid var(--gold-dim);color:var(--gold)}
+.vis-btn.cv:hover{background:rgba(201,168,76,.08)}
+.vis-btn.off{border-color:var(--border)!important;color:var(--text-dim)!important;background:transparent!important}
+
+/* Seed */
+.sw{display:flex;flex-direction:column;gap:6px}
+.sl{font-size:.55rem;letter-spacing:.2em;color:var(--text-dim);text-transform:uppercase}
+#seed-disp{font-size:.92rem;color:var(--gold);letter-spacing:.08em;word-break:break-all}
+.siw{display:flex;gap:5px;margin-top:4px}
+#seed-in{flex:1;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--text);font-family:var(--fm);font-size:.7rem;padding:6px 8px;outline:none;transition:border-color .2s}
+#seed-in:focus{border-color:var(--accent-dim)}
+#btn-seed{background:transparent;border:1px solid var(--border);color:var(--text-dim);font-family:var(--fm);font-size:.64rem;padding:6px 8px;cursor:pointer;transition:all .2s;white-space:nowrap}
+#btn-seed:hover{border-color:var(--accent-dim);color:var(--accent)}
+
+/* Sliders */
+.sr{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.sr:last-child{margin-bottom:0}
+.sk{font-size:.57rem;letter-spacing:.13em;color:var(--text-dim);text-transform:uppercase;display:flex;justify-content:space-between}
+.sk span{color:var(--accent)} .sk span.gv{color:var(--gold)}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:var(--border);outline:none;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;background:var(--accent);border-radius:50%;cursor:pointer;box-shadow:0 0 7px rgba(74,179,232,.5)}
+.rs::-webkit-slider-thumb{background:#5ab4e8}
+.gs::-webkit-slider-thumb{background:var(--gold);box-shadow:0 0 7px rgba(201,168,76,.5)}
+
+/* Legend */
+.ll{display:flex;flex-direction:column;gap:4px}
+.li{display:flex;align-items:center;gap:7px;font-size:.65rem;color:var(--text)}
+.ls{width:17px;height:9px;flex-shrink:0;border:1px solid rgba(255,255,255,.08)}
+.le{font-size:.53rem;color:var(--text-dim);white-space:nowrap;margin-left:auto}
+.lp{font-size:.57rem;color:var(--text-dim);min-width:30px;text-align:right}
+.lr{display:flex;align-items:center;gap:7px;font-size:.65rem;color:var(--accent);margin-top:5px;padding-top:5px;border-top:1px solid var(--border)}
+.lrl{width:17px;height:3px;background:linear-gradient(90deg,#3a8fcc,#7acff0);flex-shrink:0}
+#elev-bar{width:100%;height:26px;display:block;margin-top:4px}
+
+/* Kingdom list */
+.ki{display:flex;align-items:flex-start;gap:8px;padding:6px 0;border-bottom:1px solid rgba(42,48,64,.4)}
+.ki:last-child{border-bottom:none}
+.kdot{width:9px;height:9px;border-radius:50%;flex-shrink:0;margin-top:3px}
+.kinfo{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.kname{font-family:var(--fd);font-size:.63rem;color:var(--text);letter-spacing:.05em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kdet{font-size:.53rem;color:var(--text-dim)}
+
+/* Stats */
+.sg{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.sb2{background:rgba(255,255,255,.03);border:1px solid var(--border);padding:8px 9px}
+.sb2.rb{border-color:var(--accent-dim)} .sb2.cb{border-color:var(--gold-dim)}
+.sbl{font-size:.52rem;letter-spacing:.15em;color:var(--text-dim);text-transform:uppercase}
+.sbv{font-size:.9rem;color:var(--accent);margin-top:3px} .sbv.gv{color:var(--gold)}
+
+/* ── Inspector Panel ── */
+.ins-hint{font-size:.62rem;color:var(--text-dim);text-align:center;padding:12px 0;font-style:italic;letter-spacing:.06em}
+.ins-coords{font-family:var(--fd);font-size:.82rem;color:var(--accent);letter-spacing:.1em;margin-bottom:10px}
+.ins-section{font-size:.5rem;letter-spacing:.28em;text-transform:uppercase;color:var(--text-dim);margin:9px 0 5px;padding-bottom:4px;border-bottom:1px solid rgba(42,48,64,.6)}
+.ins-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0}
+.ins-key{font-size:.6rem;color:var(--text-dim);letter-spacing:.06em}
+.ins-val{font-size:.64rem;color:var(--text);letter-spacing:.04em;text-align:right;max-width:58%}
+.ins-val.accent{color:var(--accent)} .ins-val.gold{color:var(--gold)} .ins-val.green{color:var(--green)} .ins-val.red{color:#e88a6a}
+.ins-bar{display:flex;align-items:center;gap:5px}
+.ins-bar-track{width:52px;height:4px;background:rgba(42,48,64,.8);border-radius:2px;overflow:hidden;flex-shrink:0}
+.ins-bar-fill{height:100%;border-radius:2px;transition:width .3s ease}
+.ins-biome-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-right:4px;display:inline-block}
+
+/* ── Lore Panel ── */
+.pt.lore{color:#b8a0e0} .pt.lore::before{background:#b8a0e0}
+.lore-world-name{font-family:var(--fd);font-size:1.1rem;font-weight:900;color:#ddd0f8;letter-spacing:.07em;line-height:1.2;margin-bottom:2px}
+.lore-epithet{font-size:.58rem;color:#7858a8;letter-spacing:.2em;text-transform:uppercase;margin-bottom:9px;padding-bottom:9px;border-bottom:1px solid rgba(42,48,64,.9)}
+.lore-meta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-bottom:10px}
+.lore-meta-item{background:rgba(255,255,255,.025);border:1px solid rgba(42,48,64,.6);padding:5px 6px;text-align:center}
+.lore-meta-k{display:block;font-size:.48rem;color:var(--text-dim);letter-spacing:.17em;text-transform:uppercase;margin-bottom:2px}
+.lore-meta-v{display:block;font-size:.72rem;color:#ddd0f8;font-family:var(--fd)}
+.lore-sec{font-family:var(--fd);font-size:.5rem;letter-spacing:.3em;text-transform:uppercase;color:#604880;margin:11px 0 7px;padding-top:9px;border-top:1px solid rgba(80,60,120,.3)}
+.lore-events{display:flex;flex-direction:column;gap:7px;margin-bottom:4px}
+.lore-event{padding:7px 8px;background:rgba(255,255,255,.018);border:1px solid rgba(42,48,64,.5);position:relative;overflow:hidden}
+.lore-event::before{content:'';position:absolute;left:0;top:0;bottom:0;width:2px}
+.lore-event.ev-origin::before{background:#4ab3e8}
+.lore-event.ev-founding::before{background:#c9a84c}
+.lore-event.ev-war::before{background:#e87060}
+.lore-event.ev-calamity::before{background:#e06060}
+.lore-event.ev-discovery::before{background:#50d0a0}
+.lore-event.ev-alliance::before{background:#70b0e0}
+.lore-event.ev-prophecy::before{background:#b880e0}
+.lore-ev-yr{font-family:var(--fd);font-size:.5rem;letter-spacing:.18em;text-transform:uppercase;margin-bottom:3px;display:flex;align-items:center;gap:6px}
+.lore-ev-tag{font-size:.44rem;padding:1px 5px;letter-spacing:.1em;text-transform:uppercase;opacity:.8}
+.lore-ev-body{font-size:.63rem;color:var(--text);line-height:1.6;letter-spacing:.015em}
+.lore-kdiv{padding:8px 9px;margin-bottom:7px;background:rgba(255,255,255,.018);border-left:2px solid;border-radius:1px}
+.lore-kname{font-family:var(--fd);font-size:.75rem;font-weight:700;letter-spacing:.06em;margin-bottom:5px}
+.lore-krows{display:flex;flex-direction:column;gap:3px;margin-bottom:5px}
+.lore-krow{display:flex;justify-content:space-between;align-items:flex-start;gap:5px;padding:2px 0;border-bottom:1px solid rgba(42,48,64,.3)}
+.lore-krow:last-child{border-bottom:none}
+.lore-kkey{font-size:.5rem;color:var(--text-dim);letter-spacing:.14em;text-transform:uppercase;flex-shrink:0;padding-top:1px}
+.lore-kval{font-size:.62rem;color:var(--text);text-align:right;line-height:1.4;max-width:62%}
+.lore-relhdr{font-size:.48rem;letter-spacing:.26em;text-transform:uppercase;color:#604880;margin:7px 0 5px;padding-top:6px;border-top:1px solid rgba(42,48,64,.4)}
+.lore-rel{font-size:.58rem;color:var(--text-dim);line-height:1.55;margin-bottom:5px;padding-left:7px;border-left:1px solid rgba(100,80,160,.25)}
+.lore-relname{font-weight:bold;letter-spacing:.03em}
+.lore-hint{font-size:.62rem;color:var(--text-dim);text-align:center;padding:14px 0;font-style:italic;letter-spacing:.06em}
+
+/* ── Save / Load Panel ── */
+.pt.sv{color:#6ecf9a} .pt.sv::before{background:#6ecf9a}
+.sv-name-wrap{display:flex;gap:5px;margin-bottom:8px}
+#sv-name-in{flex:1;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--text);font-family:var(--fm);font-size:.7rem;padding:6px 8px;outline:none;transition:border-color .2s;min-width:0}
+#sv-name-in:focus{border-color:#4caf76}
+#sv-name-in::placeholder{color:var(--text-dim)}
+#btn-sv-save{background:transparent;border:1px solid #2a6040;color:#6ecf9a;font-family:var(--fm);font-size:.62rem;padding:6px 9px;cursor:pointer;transition:all .2s;white-space:nowrap;letter-spacing:.08em;text-transform:uppercase}
+#btn-sv-save:hover{background:rgba(78,207,154,.08);border-color:#4caf76}
+#btn-sv-save:disabled{opacity:.35;cursor:default}
+.sv-toast{font-size:.58rem;text-align:center;padding:4px;border-radius:1px;margin-bottom:6px;transition:opacity .4s;opacity:0;letter-spacing:.08em}
+.sv-toast.show{opacity:1}
+.sv-toast.ok{color:#6ecf9a;background:rgba(78,175,118,.08);border:1px solid rgba(78,175,118,.25)}
+.sv-toast.err{color:#e87878;background:rgba(232,120,120,.08);border:1px solid rgba(232,120,120,.25)}
+.sv-divider{height:1px;background:var(--border);margin:10px 0 12px}
+.sv-list-hdr{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+.sv-list-label{font-size:.5rem;letter-spacing:.26em;text-transform:uppercase;color:var(--text-dim)}
+.sv-count{font-size:.56rem;color:var(--text-dim)}
+.sv-empty{font-size:.62rem;color:var(--text-dim);text-align:center;padding:14px 0;font-style:italic;letter-spacing:.06em}
+.sv-list{display:flex;flex-direction:column;gap:7px}
+.sv-item{background:rgba(255,255,255,.022);border:1px solid var(--border);padding:9px 10px;position:relative;transition:border-color .2s;cursor:default}
+.sv-item:hover{border-color:rgba(78,175,118,.3)}
+.sv-item.active-load{border-color:#4caf76;background:rgba(78,175,118,.05)}
+.sv-item-name{font-family:var(--fd);font-size:.74rem;color:#b0e8c8;letter-spacing:.05em;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:calc(100% - 46px)}
+.sv-item-meta{font-size:.54rem;color:var(--text-dim);letter-spacing:.05em;line-height:1.6}
+.sv-item-lore{font-size:.56rem;color:#7858a8;letter-spacing:.08em;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sv-item-btns{position:absolute;top:8px;right:8px;display:flex;gap:4px}
+.sv-btn{padding:3px 6px;font-family:var(--fm);font-size:.52rem;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;transition:all .2s;border-radius:0}
+.sv-btn.load{background:transparent;border:1px solid rgba(78,175,118,.45);color:#6ecf9a}
+.sv-btn.load:hover{background:rgba(78,175,118,.12);border-color:#6ecf9a}
+.sv-btn.del{background:transparent;border:1px solid rgba(200,80,80,.3);color:#c86868}
+.sv-btn.del:hover{background:rgba(200,80,80,.1);border-color:#e07070}
+.sv-item-date{font-size:.5rem;color:var(--text-dim);margin-top:4px;opacity:.7}
+
+/* Footer */
+#footer{grid-area:ftr;display:flex;align-items:center;justify-content:space-between;padding:6px 20px;background:var(--panel-bg);border-top:1px solid var(--border);font-size:.57rem;color:var(--text-dim);letter-spacing:.13em}
+.credit{color:var(--gold-dim)}
+#status-bar{display:flex;align-items:center;gap:7px}
+.sdot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+/* ── Notes / Codex Page ── */
+#notes-page{position:fixed;inset:0;background:var(--bg);z-index:600;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .32s cubic-bezier(.22,1,.36,1)}
+#notes-page.open{transform:translateX(0)}
+.np-bar{display:flex;align-items:center;gap:0;background:var(--panel-bg);border-bottom:1px solid var(--border);padding:0 22px;height:52px;flex-shrink:0;position:relative;overflow:hidden}
+.np-bar::after{content:'';position:absolute;bottom:0;left:-100%;width:60%;height:1px;background:linear-gradient(90deg,transparent,#b8a0e0,transparent);animation:shimmer 4s linear infinite}
+.np-logo{font-family:var(--fd);font-size:.92rem;font-weight:700;letter-spacing:.14em;color:#b8a0e0;margin-right:22px;white-space:nowrap;flex-shrink:0}
+.np-tabs{display:flex;gap:0;flex:1}
+.np-tab{background:transparent;border:none;border-bottom:2px solid transparent;color:var(--text-dim);font-family:var(--fm);font-size:.58rem;letter-spacing:.18em;text-transform:uppercase;padding:0 14px;height:52px;cursor:pointer;transition:all .2s}
+.np-tab:hover{color:var(--text)}
+.np-tab.active{color:#b8a0e0;border-bottom-color:#b8a0e0}
+.np-close{margin-left:auto;background:transparent;border:1px solid var(--border);color:var(--text-dim);font-family:var(--fm);font-size:.6rem;letter-spacing:.12em;text-transform:uppercase;padding:7px 15px;cursor:pointer;transition:all .2s;white-space:nowrap;flex-shrink:0}
+.np-close:hover{border-color:var(--accent);color:var(--accent)}
+.np-body{flex:1;overflow:hidden;display:flex;justify-content:center}
+.np-col{width:100%;max-width:820px;overflow-y:auto;padding:28px 32px}
+.np-col::-webkit-scrollbar{width:3px}
+.np-col::-webkit-scrollbar-thumb{background:var(--border)}
+.np-section{display:none}
+.np-section.active{display:block}
+.np-sh{font-family:var(--fd);font-size:.58rem;font-weight:700;letter-spacing:.3em;text-transform:uppercase;color:var(--gold);margin:0 0 14px;padding-bottom:7px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:7px}
+.np-sh::before{content:'';display:inline-block;width:13px;height:1px;background:var(--gold)}
+.np-sh-k{color:inherit} .np-sh-k::before{background:currentColor}
+.np-card{background:rgba(255,255,255,.022);border:1px solid var(--border);padding:16px 18px;margin-bottom:12px;transition:border-color .2s}
+.np-card:hover{border-color:var(--accent-dim)}
+.np-card-hd{font-family:var(--fd);font-size:.78rem;font-weight:700;letter-spacing:.07em;color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.np-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.np-row{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.np-label{font-size:.5rem;letter-spacing:.18em;text-transform:uppercase;color:var(--text-dim);width:68px;flex-shrink:0}
+.np-input{flex:1;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--text);font-family:var(--fm);font-size:.72rem;padding:7px 9px;outline:none;transition:border-color .2s;min-width:0}
+.np-input:focus{border-color:var(--accent-dim)}
+.np-textarea{width:100%;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--text);font-family:var(--fm);font-size:.68rem;padding:9px 11px;outline:none;transition:border-color .2s;resize:vertical;min-height:88px;line-height:1.65;letter-spacing:.025em}
+.np-textarea:focus{border-color:var(--accent-dim)}
+.np-badge{font-size:.5rem;color:var(--green);letter-spacing:.12em;opacity:0;transition:opacity .3s;flex-shrink:0;white-space:nowrap}
+.np-badge.show{opacity:1}
+.np-badge-r{display:block;text-align:right;margin-top:4px;font-size:.5rem;color:var(--green);letter-spacing:.12em;opacity:0;transition:opacity .3s}
+.np-badge-r.show{opacity:1}
+.np-pin-hd{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px}
+.np-pin-coords{font-family:var(--fm);font-size:.68rem;color:var(--accent);letter-spacing:.1em}
+.np-pin-bio{font-size:.54rem;color:var(--text-dim);margin-top:2px;letter-spacing:.06em}
+.np-del{background:transparent;border:1px solid rgba(200,80,80,.3);color:#c86868;font-family:var(--fm);font-size:.52rem;padding:3px 8px;cursor:pointer;letter-spacing:.08em;text-transform:uppercase;transition:all .2s;flex-shrink:0}
+.np-del:hover{background:rgba(200,80,80,.1);border-color:#e07070}
+.np-empty-msg{font-size:.65rem;color:var(--text-dim);text-align:center;padding:48px 24px;font-style:italic;letter-spacing:.06em;line-height:1.8}
+.np-km-sub{font-size:.58rem;color:var(--text-dim);letter-spacing:.06em}
+/* Map-size selector */
+.msz-select{width:100%;background:rgba(255,255,255,.04);border:1px solid var(--border);color:var(--text);font-family:var(--fm);font-size:.68rem;padding:5px 8px;outline:none;cursor:pointer;margin-bottom:4px}
+.msz-select:focus{border-color:var(--accent-dim)}
+/* Inspector note */
+.ins-note-area{display:block;width:100%;background:rgba(255,255,255,.03);border:1px solid rgba(42,48,64,.9);color:var(--text);font-family:var(--fm);font-size:.62rem;padding:6px 8px;resize:none;min-height:56px;outline:none;transition:border-color .2s;letter-spacing:.025em;line-height:1.55;margin-top:4px}
+.ins-note-area:focus{border-color:var(--accent-dim)}
+.ins-codex-btn{width:100%;margin-top:5px;padding:5px 0;background:transparent;border:1px solid rgba(184,160,224,.22);color:rgba(184,160,224,.5);font-family:var(--fm);font-size:.54rem;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;transition:all .2s}
+.ins-codex-btn:hover{border-color:#b8a0e0;color:#b8a0e0;background:rgba(184,160,224,.04)}
+/* Inline edit pill */
+.edit-pill{background:transparent;border:1px solid rgba(201,168,76,.22);color:rgba(201,168,76,.42);font-family:var(--fm);font-size:.47rem;padding:2px 5px;cursor:pointer;letter-spacing:.1em;text-transform:uppercase;transition:all .2s;flex-shrink:0}
+.edit-pill:hover{border-color:var(--gold);color:var(--gold)}
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- HEADER -->
+<header id="header">
+  <div class="h-title">
+    <h1>Procedural World Generator</h1>
+    <div class="sub">Codex · Custom Names · Tile Notes · Map Pins · Variable Size · v9.0</div>
+  </div>
+  <svg class="compass" viewBox="0 0 44 44" fill="none">
+    <circle cx="22" cy="22" r="20" stroke="#2a3040" stroke-width="1"/>
+    <polygon points="22,2 24,20 22,24 20,20" fill="#4ab3e8"/>
+    <polygon points="22,42 24,24 22,20 20,24" fill="#2a5f8a"/>
+    <polygon points="2,22 20,20 24,22 20,24" fill="#4ab3e8"/>
+    <polygon points="42,22 24,20 20,22 24,24" fill="#2a5f8a"/>
+    <circle cx="22" cy="22" r="3" fill="#c9a84c"/>
+    <text x="22" y="12" text-anchor="middle" font-family="serif" font-size="5" fill="#4ab3e8">N</text>
+  </svg>
+</header>
+
+<!-- CANVAS -->
+<main id="cw" class="no-data">
+  <canvas id="worldCanvas"></canvas>
+  <canvas id="riverCanvas"></canvas>
+  <canvas id="civCanvas"></canvas>
+  <canvas id="minimapCvs" width="150" height="150"></canvas>
+  <div class="mm-label">Overview</div>
+  <div id="zoom-badge">1.00×</div>
+  <button id="btn-reset-cam">⟲ Reset View</button>
+  <div id="coords">X:-- Y:--</div>
+  <div id="mode-badge">Terrain View</div>
+  <div id="gen-overlay">
+    <div class="g-spin"></div>
+    <div class="g-stage" id="g-stage">Forging Terrain…</div>
+    <div class="g-bar-wrap"><div class="g-bar" id="g-bar"></div></div>
+  </div>
+</main>
+
+<!-- SIDEBAR -->
+<aside id="sb">
+
+  <!-- Actions -->
+  <div class="panel">
+    <div class="pt">Actions</div>
+    <button id="btn-gen">&#9670; Generate World</button>
+    <div class="trow">
+      <button class="tbtn active" data-view="terrain">Terrain</button>
+      <button class="tbtn" data-view="elevation">Elev</button>
+      <button class="tbtn" data-view="moisture">Moisture</button>
+      <button class="tbtn" data-view="temperature">Temp</button>
+    </div>
+    <div class="trow">
+      <button class="tbtn" data-view="rainfall">Rainfall</button>
+      <button class="tbtn" data-view="wind">Wind</button>
+    </div>
+    <button id="btn-grid" class="vis-btn gd">⊞ Grid View</button>
+    <button id="btn-codex" class="vis-btn" style="border-color:rgba(184,160,224,.3);color:rgba(184,160,224,.6);margin-top:6px">📓 Open World Codex</button>
+  </div>
+
+  <!-- Save / Load -->
+  <div class="panel">
+    <div class="pt sv">&#x1F4BE; Save &amp; Load</div>
+    <div id="sv-toast" class="sv-toast"></div>
+    <div class="sv-name-wrap">
+      <input id="sv-name-in" type="text" placeholder="Name this world…" maxlength="36"/>
+      <button id="btn-sv-save" disabled>Save</button>
+    </div>
+    <div class="sv-divider"></div>
+    <div class="sv-list-hdr">
+      <span class="sv-list-label">Saved Worlds</span>
+      <span class="sv-count" id="sv-count">0 / 12</span>
+    </div>
+    <div id="sv-list"><div class="sv-empty">No saved worlds yet</div></div>
+  </div>
+
+  <!-- Inspector -->
+  <div class="panel">
+    <div class="pt ins">&#8982; Tile Inspector</div>
+    <div id="inspector">
+      <div class="ins-hint">Click any tile on the map to inspect it</div>
+    </div>
+  </div>
+
+  <!-- Seed -->
+  <div class="panel">
+    <div class="pt">Seed</div>
+    <div class="sw">
+      <div class="sl">Current Seed</div>
+      <div id="seed-disp">—</div>
+      <div class="siw">
+        <input id="seed-in" type="text" placeholder="Custom seed…" maxlength="20"/>
+        <button id="btn-seed">Use</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Noise -->
+  <div class="panel">
+    <div class="pt">Noise Parameters</div>
+    <div class="sr"><div class="sk">Octaves <span id="v-oct">6</span></div><input type="range" id="s-oct" min="2" max="9" value="6"/></div>
+    <div class="sr"><div class="sk">Scale <span id="v-sc">4.4</span></div><input type="range" id="s-sc" min="10" max="90" value="35"/></div>
+    <div class="sr"><div class="sk">Domain Warp <span id="v-wp">0.60</span></div><input type="range" id="s-wp" min="0" max="100" value="60"/></div>
+    <div class="sr"><div class="sk">Persistence <span id="v-pe">0.50</span></div><input type="range" id="s-pe" min="20" max="80" value="50"/></div>
+  </div>
+
+  <!-- World Shape -->
+  <div class="panel">
+    <div class="pt">World Shape</div>
+    <div class="sr" style="margin-bottom:10px">
+      <div class="sk">Map Size</div>
+      <select id="s-msz" class="msz-select">
+        <option value="80">Small (80×80)</option>
+        <option value="120" selected>Standard (120×120)</option>
+        <option value="160">Large (160×160)</option>
+        <option value="200">XL (200×200)</option>
+        <option value="240">Huge (240×240)</option>
+      </select>
+    </div>
+    <div class="sr"><div class="sk">Sea Level <span id="v-sea">0.30</span></div><input type="range" id="s-sea" min="5" max="65" value="30"/></div>
+    <div class="sr"><div class="sk">Island Falloff <span id="v-fo">0.30</span></div><input type="range" id="s-fo" min="0" max="80" value="30"/></div>
+    <div class="sr"><div class="sk">Ridge Amount <span id="v-rd">0.40</span></div><input type="range" id="s-rd" min="0" max="100" value="40"/></div>
+  </div>
+
+  <!-- Rivers -->
+  <div class="panel">
+    <div class="pt riv">~ River System</div>
+    <div class="sr"><div class="sk">River Sources <span id="v-rv">18</span></div><input type="range" id="s-rv" min="3" max="50" value="18" class="rs"/></div>
+    <div class="sr"><div class="sk">Min Source Elev <span id="v-rs">0.72</span></div><input type="range" id="s-rs" min="55" max="95" value="72" class="rs"/></div>
+    <div class="sr"><div class="sk">Min River Length <span id="v-rl">15</span></div><input type="range" id="s-rl" min="5" max="60" value="15" class="rs"/></div>
+    <button id="btn-rv" class="vis-btn rv">~~ Rivers Visible</button>
+  </div>
+
+  <!-- Civilizations -->
+  <div class="panel">
+    <div class="pt civ">&#9812; Civilization</div>
+    <div class="sr"><div class="sk">Cities <span id="v-ci" class="gv">20</span></div><input type="range" id="s-ci" min="10" max="30" value="20" class="gs"/></div>
+    <div class="sr"><div class="sk">Kingdoms <span id="v-ki" class="gv">4</span></div><input type="range" id="s-ki" min="3" max="6" value="4" class="gs"/></div>
+    <button id="btn-cv" class="vis-btn cv">&#9812; Civilizations Visible</button>
+    <button id="btn-roads" class="vis-btn rd2">&#9014; Roads Visible</button>
+  </div>
+
+  <!-- Kingdom List -->
+  <div class="panel">
+    <div class="pt civ">Kingdoms</div>
+    <div id="kingdoms-list"></div>
+  </div>
+
+  <!-- World Lore -->
+  <div class="panel">
+    <div class="pt lore">&#x1F4DC; World Lore</div>
+    <div id="world-lore"><div class="lore-hint">Generate a world to read its history</div></div>
+  </div>
+
+  <!-- Legend -->
+  <div class="panel">
+    <div class="pt">Biome Legend</div>
+    <div class="ll" id="legend"></div>
+    <div class="lr" id="legend-river" style="display:none"><div class="lrl"></div><span>River</span><span class="lp" id="legend-rc">—</span></div>
+  </div>
+
+  <!-- Elevation Profile -->
+  <div class="panel">
+    <div class="pt">Elevation Profile</div>
+    <canvas id="elev-bar" width="265" height="26"></canvas>
+  </div>
+
+  <!-- Statistics -->
+  <div class="panel">
+    <div class="pt">Statistics</div>
+    <div class="sg">
+      <div class="sb2"><div class="sbl">Grid</div><div class="sbv" id="st-sz">—</div></div>
+      <div class="sb2"><div class="sbl">Tiles</div><div class="sbv" id="st-ti">—</div></div>
+      <div class="sb2"><div class="sbl">Land %</div><div class="sbv" id="st-la">—</div></div>
+      <div class="sb2"><div class="sbl">Water %</div><div class="sbv" id="st-wa">—</div></div>
+      <div class="sb2"><div class="sbl">Avg Elev</div><div class="sbv" id="st-el">—</div></div>
+      <div class="sb2"><div class="sbl">Biomes</div><div class="sbv" id="st-bi">—</div></div>
+      <div class="sb2 rb"><div class="sbl">Rivers</div><div class="sbv" id="st-rv">—</div></div>
+      <div class="sb2 rb"><div class="sbl">River Tiles</div><div class="sbv" id="st-rt">—</div></div>
+      <div class="sb2 cb"><div class="sbl">Cities</div><div class="sbv gv" id="st-ci">—</div></div>
+      <div class="sb2 cb"><div class="sbl">Kingdoms</div><div class="sbv gv" id="st-ki">—</div></div>
+      <div class="sb2 cb"><div class="sbl">Roads</div><div class="sbv gv" id="st-rn">—</div></div>
+    </div>
+  </div>
+
+</aside>
+
+<!-- FOOTER -->
+<footer id="footer">
+  <div id="status-bar"><span class="sdot"></span><span id="st-txt">Ready</span></div>
+  <span class="credit">Made by Aaron Sermon</span>
+  <span>World Codex · Custom Names · Variable Map Size · v9.0</span>
+</footer>
+</div>
+
+<!-- CODEX / NOTES PAGE (must be in DOM before the script runs) -->
+<div id="notes-page">
+  <div class="np-bar">
+    <span class="np-logo">📓 World Codex</span>
+    <div class="np-tabs">
+      <button class="np-tab active" data-tab="world">World</button>
+      <button class="np-tab" data-tab="kingdoms">Kingdoms</button>
+      <button class="np-tab" data-tab="cities">Cities</button>
+      <button class="np-tab" data-tab="pins">Map Pins</button>
+    </div>
+    <button class="np-close" id="np-close">✕ Return to Map</button>
+  </div>
+  <div class="np-body">
+    <div class="np-col">
+      <div class="np-section active" id="np-world"></div>
+      <div class="np-section" id="np-kingdoms"></div>
+      <div class="np-section" id="np-cities"></div>
+      <div class="np-section" id="np-pins"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================================================================
+   PROCEDURAL WORLD GENERATOR  —  v5.0
+   Author : Aaron Sermon
+   New in v5.0:
+     • Camera system  — zoom (mouse wheel) + pan (click-drag)
+       All three canvas layers transform through cam state
+     • Tile Inspector — click any tile for deep info panel:
+         Elevation · Terrain · Biome · Moisture · Temperature
+         River status · Nearest city · Kingdom territory
+     • Visible tile-range culling for fast territory rendering
+     • Reset View button + zoom level HUD badge
+================================================================ */
+"use strict";
+
+/* ── §1  GRID ── */
+let GRID_W = 120, GRID_H = 120;
+
+/* ── §2  BIOMES  (20 types) ── */
+const BIOMES = [
+  // ── Water (0-2) ──────────────────────────────────────────────────
+  {id:'deep_ocean',  label:'Deep Ocean',    color:'#0a1e35', group:'water'},    // 0
+  {id:'ocean',       label:'Ocean',          color:'#183d6a', group:'water'},    // 1
+  {id:'coast',       label:'Coastal',        color:'#2460a0', group:'water'},    // 2
+  // ── Shoreline (3) ────────────────────────────────────────────────
+  {id:'beach',       label:'Beach',          color:'#c9ae72', group:'land'},     // 3
+  // ── Temperate Wetlands (4) ───────────────────────────────────────
+  {id:'wetland',     label:'Wetlands',       color:'#557055', group:'land'},     // 4
+  // ── Grasslands (5-6) ─────────────────────────────────────────────
+  {id:'plains',      label:'Plains',         color:'#70aa3c', group:'land'},     // 5
+  {id:'savanna',     label:'Savanna',        color:'#b8b840', group:'arid'},     // 6
+  // ── Temperate Forest (7-8) ───────────────────────────────────────
+  {id:'forest',      label:'Forest',         color:'#387828', group:'forest'},   // 7
+  {id:'dense_forest',label:'Dense Forest',   color:'#1e5018', group:'forest'},   // 8
+  // ── Highland (9-10) ──────────────────────────────────────────────
+  {id:'hills',       label:'Hills',          color:'#7a6040', group:'highland'}, // 9
+  {id:'rocky',       label:'Rocky Hills',    color:'#707060', group:'highland'}, // 10
+  // ── Mountain (11-12) ─────────────────────────────────────────────
+  {id:'mountain',    label:'Mountains',      color:'#909090', group:'mountain'}, // 11
+  {id:'snow',        label:'Snow Peaks',     color:'#e8eaee', group:'mountain'}, // 12
+  // ── NEW: Cold / Polar (13, 19) ───────────────────────────────────
+  {id:'tundra',      label:'Tundra',         color:'#92a078', group:'cold'},     // 13
+  // ── NEW: Arid (14) ───────────────────────────────────────────────
+  {id:'desert',      label:'Desert',         color:'#c8a848', group:'arid'},     // 14
+  // ── NEW: Tropical (15) ───────────────────────────────────────────
+  {id:'jungle',      label:'Jungle',         color:'#0e5422', group:'forest'},   // 15
+  // ── NEW: Volcanic (16) ───────────────────────────────────────────
+  {id:'volcanic',    label:'Volcanic',       color:'#5a1a0a', group:'mountain'}, // 16
+  // ── NEW: Boreal (17) ─────────────────────────────────────────────
+  {id:'taiga',       label:'Taiga',          color:'#2a5038', group:'forest'},   // 17
+  // ── NEW: Tropical Wetland (18) ───────────────────────────────────
+  {id:'swamp',       label:'Swamp',          color:'#2e4030', group:'wetland'},  // 18
+  // ── NEW: Ice Cap (19) ────────────────────────────────────────────
+  {id:'ice_cap',     label:'Ice Cap',        color:'#c8ddf0', group:'polar'},    // 19
+];
+
+/* ── §3  DOM ── */
+const wrap      = document.getElementById('cw');
+const canvas    = document.getElementById('worldCanvas');
+const ctx       = canvas.getContext('2d');
+const rCvs      = document.getElementById('riverCanvas');
+const rCtx      = rCvs.getContext('2d');
+const civCvs    = document.getElementById('civCanvas');
+const civCtx    = civCvs.getContext('2d');
+const btnGen    = document.getElementById('btn-gen');
+const btnSeed   = document.getElementById('btn-seed');
+const seedDisp  = document.getElementById('seed-disp');
+const seedIn    = document.getElementById('seed-in');
+const coordsEl  = document.getElementById('coords');
+const modeBadge = document.getElementById('mode-badge');
+const zoomBadge = document.getElementById('zoom-badge');
+const overlay   = document.getElementById('gen-overlay');
+const gStage    = document.getElementById('g-stage');
+const gBar      = document.getElementById('g-bar');
+const stTxt     = document.getElementById('st-txt');
+const legendEl  = document.getElementById('legend');
+const elevBarCvs= document.getElementById('elev-bar');
+const elevBarCtx= elevBarCvs.getContext('2d');
+const inspector = document.getElementById('inspector');
+
+const sl = {
+  oct:document.getElementById('s-oct'), sc:document.getElementById('s-sc'),
+  wp:document.getElementById('s-wp'),   pe:document.getElementById('s-pe'),
+  sea:document.getElementById('s-sea'), fo:document.getElementById('s-fo'),
+  rd:document.getElementById('s-rd'),   rv:document.getElementById('s-rv'),
+  rs:document.getElementById('s-rs'),   rl:document.getElementById('s-rl'),
+  ci:document.getElementById('s-ci'),   ki:document.getElementById('s-ki'),
+};
+const vl = {
+  oct:document.getElementById('v-oct'), sc:document.getElementById('v-sc'),
+  wp:document.getElementById('v-wp'),   pe:document.getElementById('v-pe'),
+  sea:document.getElementById('v-sea'), fo:document.getElementById('v-fo'),
+  rd:document.getElementById('v-rd'),   rv:document.getElementById('v-rv'),
+  rs:document.getElementById('v-rs'),   rl:document.getElementById('v-rl'),
+  ci:document.getElementById('v-ci'),   ki:document.getElementById('v-ki'),
+};
+const stEls = {
+  sz:document.getElementById('st-sz'), ti:document.getElementById('st-ti'),
+  la:document.getElementById('st-la'), wa:document.getElementById('st-wa'),
+  el:document.getElementById('st-el'), bi:document.getElementById('st-bi'),
+  rv:document.getElementById('st-rv'), rt:document.getElementById('st-rt'),
+  ci:document.getElementById('st-ci'), ki:document.getElementById('st-ki'),
+};
+
+/* ── §4  STATE ── */
+let currentSeed = 0, viewMode = 'terrain';
+let riversVisible = true, civVisible = true;
+let elevGrid = null, moistGrid = null, tempGrid = null;
+let rainfallGrid = null;          // NEW: post-rain-shadow actual precipitation
+let windXGrid = null, windYGrid = null; // NEW: prevailing wind components per tile
+let biomeGrid = null, shadeGrid = null, biomeCounts = null;
+let filledElev = null, flowDir = null, flowAccum = null;
+let rivers = [], riverTileSet = null;
+let cities = [], kingdoms = [], territoryGrid = null, cityByTile = null;
+let selectedTile = null;   // { tx, ty } or null
+let terrainCache = null, terrainCacheMode = '';    // §9b: 120×120 pixel cache
+let roads = [], roadTileSet = new Set();           // §13b: road network
+let roadsVisible = true, gridMode = false;         // render toggles
+
+/* ── §4b  NOTES SYSTEM ─────────────────────────────────────────────
+   notesDB is per-seed, stored in localStorage under 'pwg_notes_<seed>'.
+   Structure:
+     { worldName, worldEpithet, worldNote,
+       kingdoms: { [ki]: {name,note} },
+       cities:   { [ci]: {name,note} },
+       tiles:    { "x,y": {title,note} }  }
+──────────────────────────────────────────────────────────────── */
+const NOTES_PFX = 'pwg_notes_';
+let notesDB = _blankNotes();
+
+function _blankNotes(){
+  return {worldName:null,worldEpithet:null,worldNote:'',kingdoms:{},cities:{},tiles:{}};
+}
+function loadNotesDB(seed){
+  try{ notesDB=JSON.parse(localStorage.getItem(NOTES_PFX+seed)||'null')||_blankNotes(); }
+  catch{ notesDB=_blankNotes(); }
+}
+function saveNotesDB(){
+  if(currentSeed) localStorage.setItem(NOTES_PFX+currentSeed,JSON.stringify(notesDB));
+}
+/* Name getters (fall back to generated names) */
+function getKDN(ki){ return notesDB.kingdoms[ki]?.name || kingdoms[ki]?.name || ''; }
+function getCDN(ci){ return notesDB.cities[ci]?.name   || cities[ci]?.name   || ''; }
+function getWorldDN(){ return notesDB.worldName || worldLore?.worldName?.base || ''; }
+function getWorldEpit(){ return notesDB.worldEpithet || worldLore?.worldName?.epithet || ''; }
+function getTileNote(tx,ty){ return notesDB.tiles[`${tx},${ty}`]||{title:'',note:''}; }
+function setTileNote(tx,ty,note,title){
+  const k=`${tx},${ty}`;
+  if(!note.trim()&&!(title||'').trim()) delete notesDB.tiles[k];
+  else notesDB.tiles[k]={title:title||'',note};
+  saveNotesDB();
+}
+/* Apply overrides from notesDB onto in-memory objects (after generation) */
+function applyCustomNames(){
+  for(const[ki,ov]of Object.entries(notesDB.kingdoms)){
+    const kg=kingdoms[+ki]; if(!kg||!ov?.name)continue;
+    const idx=kg.fullName.lastIndexOf(kg.name);
+    const pre=idx>0?kg.fullName.slice(0,idx).trimEnd():'';
+    kg.name=ov.name; kg.fullName=pre?pre+' '+ov.name:ov.name;
+  }
+  for(const[ci,ov]of Object.entries(notesDB.cities)){
+    const c=cities[+ci]; if(!c||!ov?.name)continue;
+    c.name=ov.name;
+  }
+  if(notesDB.worldName&&worldLore?.worldName) worldLore.worldName.base=notesDB.worldName;
+  if(notesDB.worldEpithet&&worldLore?.worldName) worldLore.worldName.epithet=notesDB.worldEpithet;
+}
+/* HTML-escape helper */
+function escH(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+/* ── §5  CAMERA STATE ──
+   cam.zoom  : world-space zoom multiplier (1 = fit-to-screen)
+   cam.panX  : screen-pixels offset for tile column 0
+   cam.panY  : screen-pixels offset for tile row 0
+*/
+const cam = { zoom: 1, panX: 0, panY: 0 };
+const MIN_ZOOM = 0.35, MAX_ZOOM = 14;
+
+/* Tile ↔ screen coordinate helpers (use canvas dimensions) */
+function stW() { return cam.zoom * canvas.width  / GRID_W; }
+function stH() { return cam.zoom * canvas.height / GRID_H; }
+function tileCX(tx) { return cam.panX + (tx + 0.5) * stW(); }
+function tileCY(ty) { return cam.panY + (ty + 0.5) * stH(); }
+function tileRect(tx, ty) {
+  const w = stW(), h = stH();
+  return { x: cam.panX + tx*w, y: cam.panY + ty*h, w, h };
+}
+function screenToTileF(sx, sy) {
+  return { tx: (sx - cam.panX) / stW(), ty: (sy - cam.panY) / stH() };
+}
+function screenToTile(sx, sy) {
+  const {tx, ty} = screenToTileF(sx, sy);
+  return { tx: Math.floor(tx)|0, ty: Math.floor(ty)|0 };
+}
+function visRange() {
+  const cW = canvas.width, cH = canvas.height;
+  const w = stW(), h = stH();
+  return {
+    tx0: Math.max(0, Math.floor(-cam.panX / w)),
+    ty0: Math.max(0, Math.floor(-cam.panY / h)),
+    tx1: Math.min(GRID_W - 1, Math.ceil((cW - cam.panX) / w)),
+    ty1: Math.min(GRID_H - 1, Math.ceil((cH - cam.panY) / h)),
+  };
+}
+function resetCamera() {
+  startZoomAnim(1, 0, 0);
+  zoomBadge.textContent = '1.00×';
+}
+
+/* ── §5b  SMOOTH ZOOM ANIMATION ──────────────────────────────────
+   animZoom stores the target state. zoomAnimTick() runs every rAF
+   frame and lerps cam toward the target with exponential decay,
+   giving a smooth deceleration feel. Multiple wheel events before
+   the animation finishes simply update the target (accumulative).
+──────────────────────────────────────────────────────────────── */
+const animZoom = {active:false, tz:1, tpx:0, tpy:0};
+
+function zoomAnimTick(){
+  const A = 0.20;
+  cam.zoom += (animZoom.tz  - cam.zoom)  * A;
+  cam.panX += (animZoom.tpx - cam.panX)  * A;
+  cam.panY += (animZoom.tpy - cam.panY)  * A;
+  zoomBadge.textContent = cam.zoom.toFixed(2) + '×';
+  renderAll();
+  const done = Math.abs(cam.zoom - animZoom.tz) < 4e-4 &&
+               Math.abs(cam.panX - animZoom.tpx) < 0.25 &&
+               Math.abs(cam.panY - animZoom.tpy) < 0.25;
+  if (!done) {
+    requestAnimationFrame(zoomAnimTick);
+  } else {
+    cam.zoom = animZoom.tz; cam.panX = animZoom.tpx; cam.panY = animZoom.tpy;
+    animZoom.active = false;
+    zoomBadge.textContent = cam.zoom.toFixed(2) + '×';
+    renderAll();
+  }
+}
+
+function startZoomAnim(tz, tpx, tpy) {
+  animZoom.tz = tz; animZoom.tpx = tpx; animZoom.tpy = tpy;
+  if (!animZoom.active) { animZoom.active = true; requestAnimationFrame(zoomAnimTick); }
+}
+
+/* ── §6  PRNG ── */
+function mkRNG(seed) {
+  let s = (seed ^ 0xdeadbeef) >>> 0 || 1;
+  return () => { s ^= s<<13; s ^= s>>17; s ^= s<<5; return (s>>>0)/0xFFFFFFFF; };
+}
+function buildPerm(rng) {
+  const p = new Uint8Array(256);
+  for (let i=0;i<256;i++) p[i]=i;
+  for (let i=255;i>0;i--) { const j=(rng()*(i+1))|0, t=p[i]; p[i]=p[j]; p[j]=t; }
+  const pm = new Uint8Array(512);
+  for (let i=0;i<512;i++) pm[i]=p[i&255];
+  return pm;
+}
+
+/* ── §7  PERLIN NOISE ── */
+const G2  = [[1,1],[-1,1],[1,-1],[-1,-1],[1,0],[-1,0],[0,1],[0,-1]];
+const fd  = t => t*t*t*(t*(t*6-15)+10);
+const lrp = (a,b,t) => a+t*(b-a);
+function dot2(pm,ix,iy,fx,fy) { const g=G2[pm[(ix+pm[iy&255])&255]&7]; return g[0]*fx+g[1]*fy; }
+function perlin2(pm,x,y) {
+  const ix=Math.floor(x)&255, iy=Math.floor(y)&255, u=fd(x-Math.floor(x)), v=fd(y-Math.floor(y));
+  const fx=x-Math.floor(x), fy=y-Math.floor(y);
+  return lrp(lrp(dot2(pm,ix,iy,fx,fy),dot2(pm,ix+1,iy,fx-1,fy),u),
+             lrp(dot2(pm,ix,iy+1,fx,fy-1),dot2(pm,ix+1,iy+1,fx-1,fy-1),u),v);
+}
+function fbm(pm,x,y,o,l,p){let v=0,a=0.5,f=1,m=0;for(let i=0;i<o;i++){v+=perlin2(pm,x*f,y*f)*a;m+=a;a*=p;f*=l;}return(v/m+1)*0.5;}
+function ridgedFBM(pm,x,y,o,l,p){let v=0,a=0.5,f=1,m=0,pv=1;for(let i=0;i<o;i++){const n=1-Math.abs(perlin2(pm,x*f,y*f)),sq=n*n;v+=sq*a*pv;m+=a;pv=sq;a*=p;f*=l;}return Math.min(1,v/m*2);}
+function warpedFBM(pM,pW,x,y,o,ws,p){const L=2;
+  const w1x=fbm(pW,x+1.7,y+9.2,Math.max(2,o-2),L,p),w1y=fbm(pW,x+8.3,y+2.8,Math.max(2,o-2),L,p);
+  const dx1=(w1x-.5)*2*ws,dy1=(w1y-.5)*2*ws;
+  const w2x=fbm(pW,x+dx1+4.1,y+dy1+3.7,Math.max(2,o-3),L,p),w2y=fbm(pW,x+dx1+7.5,y+dy1+0.9,Math.max(2,o-3),L,p);
+  return fbm(pM,x+dx1+(w2x-.5)*ws*.45,y+dy1+(w2y-.5)*ws*.45,o,L,p);
+}
+function contMask(pE,nx,ny,tx,ty,fs){
+  const dx=(tx/GRID_W-.5)*2,dy=(ty/GRID_H-.5)*2,d=Math.sqrt(dx*dx+dy*dy);
+  return Math.max(0,1-(d-(fbm(pE,nx*.4+50,ny*.4+50,3,2,.5)-.5)*.35)*fs*1.5);
+}
+
+/* ── §8  WORLD GENERATION ── */
+function generateWorld(seed) {
+  terrainCache = null; terrainCacheMode = '';   // invalidate cache on new world
+  const rng=mkRNG(seed),pE=buildPerm(rng),pW=buildPerm(rng),pM=buildPerm(rng),pT=buildPerm(rng);
+  const oct=+sl.oct.value, sc=+sl.sc.value/8, ws=+sl.wp.value/100, pe=+sl.pe.value/100;
+  const seaLv=+sl.sea.value/100, fs=+sl.fo.value/100, ra=+sl.rd.value/100, L=2;
+  const tot=GRID_W*GRID_H;
+  elevGrid=new Float32Array(tot); moistGrid=new Float32Array(tot);
+  tempGrid=new Float32Array(tot); biomeGrid=new Uint8Array(tot);
+  biomeCounts=new Int32Array(BIOMES.length);
+
+  // Phase 1 — Noise sampling
+  for(let ty=0;ty<GRID_H;ty++) for(let tx=0;tx<GRID_W;tx++){
+    const i=ty*GRID_W+tx, nx=tx/GRID_W*sc, ny=ty/GRID_H*sc;
+    const eS=warpedFBM(pE,pW,nx,ny,oct,ws,pe), eR=ridgedFBM(pE,nx+30,ny+30,Math.max(3,oct-1),L,pe);
+    const mask=contMask(pW,nx,ny,tx,ty,fs);
+    elevGrid[i]=Math.pow(Math.max(0,Math.min(1,(eS*(1-ra)+eR*ra)*(0.4+0.6*mask))),1.15);
+    // Base atmospheric moisture (pre-shadow perlin noise layer)
+    moistGrid[i]=warpedFBM(pM,pM,nx+100,ny+200,Math.max(3,oct-1),ws*.7,pe);
+  }
+
+  // Phase 2 — Elevation remapping (histogram to anchor sea level)
+  const srt=Float32Array.from(elevGrid).sort(), seaRaw=srt[(seaLv*tot)|0], T=.30;
+  const sB=seaRaw>0?T/seaRaw:1, sA=seaRaw<1?(1-T)/(1-seaRaw):1;
+  for(let i=0;i<tot;i++){const e=elevGrid[i];elevGrid[i]=Math.max(0,Math.min(1,e<=seaRaw?e*sB:T+(e-seaRaw)*sA));}
+
+  // Phase 3 — Temperature (recomputed with remapped elevation + latitude gradient)
+  for(let ty=0;ty<GRID_H;ty++) for(let tx=0;tx<GRID_W;tx++){
+    const i=ty*GRID_W+tx, nx=tx/GRID_W*sc, ny=ty/GRID_H*sc;
+    const lat=1-Math.abs(ty/GRID_H-.5)*2; // 1=equator, 0=pole
+    const elevPenalty=elevGrid[i]*0.48;
+    const noise=fbm(pT,nx+300,ny+300,3,L,.5);
+    tempGrid[i]=Math.max(0,Math.min(1, lat*0.68 + noise*0.32 - elevPenalty));
+  }
+
+  // Phase 4 — Climate simulation (wind field + rainfall + rain shadows)
+  simulateClimate();
+
+  // Phase 5 — Biome classification using elevation + rainfall + temperature
+  for(let i=0;i<tot;i++){biomeGrid[i]=classifyBiome(elevGrid[i],rainfallGrid[i],tempGrid[i]);biomeCounts[biomeGrid[i]]++;}
+
+  // Phase 6 — Hillshading (Lambertian with Sobel-like gradient)
+  shadeGrid=new Float32Array(tot);
+  const SX=1/Math.sqrt(3.25), SY=-1/Math.sqrt(3.25), SZ=1.5/Math.sqrt(3.25), SS=GRID_W*.08;
+  for(let ty=1;ty<GRID_H-1;ty++) for(let tx=1;tx<GRID_W-1;tx++){
+    const i=ty*GRID_W+tx, dX=(elevGrid[i+1]-elevGrid[i-1])*SS, dY=(elevGrid[i+GRID_W]-elevGrid[i-GRID_W])*SS;
+    const nL=Math.sqrt(dX*dX+dY*dY+1);
+    shadeGrid[i]=Math.max(.18,(-dX/nL)*SX+(-dY/nL)*SY+(1/nL)*SZ);
+  }
+  for(let tx=0;tx<GRID_W;tx++){shadeGrid[tx]=.6;shadeGrid[(GRID_H-1)*GRID_W+tx]=.6;}
+  for(let ty=0;ty<GRID_H;ty++){shadeGrid[ty*GRID_W]=.6;shadeGrid[ty*GRID_W+GRID_W-1]=.6;}
+}
+
+/* ── §8a  OCEAN DISTANCE (multi-source BFS) ── */
+function computeOceanDist(){
+  const tot=GRID_W*GRID_H, dist=new Uint16Array(tot).fill(65535);
+  const q=[], D4=[[1,0],[-1,0],[0,1],[0,-1]];
+  for(let i=0;i<tot;i++) if(elevGrid[i]<0.38){dist[i]=0;q.push(i);}
+  let head=0;
+  while(head<q.length){
+    const i=q[head++], tx=i%GRID_W, ty=(i/GRID_W)|0;
+    for(const[dx,dy]of D4){
+      const nx=tx+dx, ny=ty+dy;
+      if(nx<0||ny<0||nx>=GRID_W||ny>=GRID_H)continue;
+      const ni=ny*GRID_W+nx;
+      if(dist[ni]>dist[i]+1){dist[ni]=dist[i]+1;q.push(ni);}
+    }
+  }
+  let maxD=0;for(let i=0;i<tot;i++)if(dist[i]<65535)maxD=Math.max(maxD,dist[i]);
+  const norm=new Float32Array(tot);
+  for(let i=0;i<tot;i++) norm[i]=dist[i]>=65535?1:dist[i]/maxD;
+  return norm;
+}
+
+/* ── §8b  CLIMATE SIMULATION ── */
+/*
+  Wind model (3-cell atmospheric circulation by latitude band):
+    lat 0.00–0.18  ITCZ / Doldrums:     calm, very high moisture
+    lat 0.18–0.40  Trade winds:          blow toward equator (–x ±y)
+    lat 0.40–0.65  Westerlies:           blow away from equator (+x)
+    lat 0.65–1.00  Polar easterlies:     blow toward equator (–x)
+
+  Rain-shadow algorithm:
+    For each land tile, trace backward along the wind direction for
+    SHADOW_STEPS tiles. Any mountain tile in that upwind corridor
+    blocks and depletes moisture; the nearer the mountain the stronger
+    the effect. This produces realistic arid leeward zones.
+
+  Orographic uplift:
+    If the immediately downwind tile is significantly higher, the air
+    parcel rises and releases extra rainfall on the windward face.
+*/
+function simulateClimate(){
+  const tot=GRID_W*GRID_H;
+  rainfallGrid=new Float32Array(tot);
+  windXGrid=new Float32Array(tot);
+  windYGrid=new Float32Array(tot);
+
+  // ── Wind field ──────────────────────────────────────────────────
+  for(let ty=0;ty<GRID_H;ty++){
+    const lat=Math.abs(ty/GRID_H-.5)*2; // 0=equator 1=pole
+    const hem=ty<GRID_H/2?1:-1;         // +1=N hemisphere
+    let wdx,wdy;
+    if(lat<0.18){      wdx=0;    wdy=0;          } // ITCZ doldrums (calm)
+    else if(lat<0.22){ wdx=-0.4; wdy=hem*0.1;    } // ITCZ transition
+    else if(lat<0.40){ wdx=-1.0; wdy=hem*0.25;   } // Trade winds
+    else if(lat<0.45){ wdx= 0.2; wdy=-hem*0.1;   } // Sub-tropical transition
+    else if(lat<0.65){ wdx= 1.1; wdy=-hem*0.15;  } // Westerlies
+    else if(lat<0.70){ wdx= 0.2; wdy= hem*0.1;   } // Polar transition
+    else{              wdx=-0.9; wdy= hem*0.1;    } // Polar easterlies
+    for(let tx=0;tx<GRID_W;tx++){
+      const i=ty*GRID_W+tx;
+      windXGrid[i]=wdx; windYGrid[i]=wdy;
+    }
+  }
+
+  // ── Ocean proximity → base moisture ────────────────────────────
+  const oceanDist=computeOceanDist();
+
+  // ── Per-tile rainfall ──────────────────────────────────────────
+  const SHADOW_STEPS=28, BARRIER_THR=0.58, SHADOW_STR=3.2;
+
+  for(let ty=0;ty<GRID_H;ty++) for(let tx=0;tx<GRID_W;tx++){
+    const i=ty*GRID_W+tx;
+
+    // Base moisture = perlin noise + ocean proximity influence
+    const oceanProx=Math.max(0,1-oceanDist[i]*1.4);
+    let moisture=moistGrid[i]*0.52+oceanProx*0.58;
+    moisture=Math.min(1,moisture);
+
+    // ITCZ extra moisture near equator (Inter-Tropical Convergence Zone)
+    const lat=Math.abs(ty/GRID_H-.5)*2;
+    if(lat<0.14) moisture+=0.32*(1-lat/0.14);
+    else if(lat<0.22) moisture+=0.10*(1-(lat-0.14)/0.08);
+
+    // Trace upwind for mountain barriers
+    const wdx=windXGrid[i], wdy=windYGrid[i];
+    let barrierAcc=0;
+    let cx=tx, cy=ty;
+    for(let s=1;s<=SHADOW_STEPS;s++){
+      cx-=wdx*0.9; cy-=wdy*0.9;
+      // Wrap horizontally (trade winds circle the globe), clamp vertically
+      const nx=((Math.round(cx)%GRID_W)+GRID_W)%GRID_W;
+      const ny=Math.max(0,Math.min(GRID_H-1,Math.round(cy)));
+      const ni=ny*GRID_W+nx;
+      const elev=elevGrid[ni];
+      if(elev>BARRIER_THR){
+        const h=(elev-BARRIER_THR)/(1-BARRIER_THR);
+        const decay=1-s/SHADOW_STEPS; // closer barriers = stronger shadow
+        barrierAcc+=h*h*decay*0.18;
+      }
+    }
+    // Exponential rain-shadow factor
+    const shadowF=Math.exp(-barrierAcc*SHADOW_STR);
+    moisture*=shadowF;
+
+    // Orographic uplift — windward face of mountains gains extra rain
+    const fwdX=tx+Math.round(wdx), fwdY=ty+Math.round(wdy);
+    if(fwdX>=0&&fwdY>=0&&fwdX<GRID_W&&fwdY<GRID_H){
+      const elevFwd=elevGrid[fwdY*GRID_W+fwdX];
+      const rise=elevFwd-elevGrid[i];
+      if(rise>0.04) moisture+=rise*0.55; // windward boost
+    }
+
+    // Polar suppression — cold dry air near poles
+    if(lat>0.70) moisture*=Math.max(0.1,1-(lat-0.70)/0.35);
+
+    rainfallGrid[i]=Math.max(0,Math.min(1,moisture));
+  }
+}
+
+/* ── §9a  BIOME CLASSIFICATION ──
+   Whittaker-inspired: elevation → temperature → rainfall → biome
+   Water/mountain biomes are determined by elevation alone;
+   land biomes follow the temp×rainfall diagram.
+── */
+function classifyBiome(e,rain,t){
+  // ── Water ───────────────────────────────────────────────────────
+  if(e<0.20)return 0; // deep ocean
+  if(e<0.30)return 1; // ocean
+  if(e<0.38)return 2; // coastal
+  if(e<0.43)return 3; // beach
+
+  // ── High elevation (dominate regardless of climate) ──────────────
+  if(e>=0.97)return(rain>0.3&&t>0.25)?16:12; // volcanic calderas vs snow
+  if(e>=0.92)return 11; // mountain
+  if(e>=0.85)return 10; // rocky
+  if(e>=0.75)return 9;  // hills
+
+  // ── Polar: very cold ────────────────────────────────────────────
+  if(t<0.09)return 19; // ice cap
+  if(t<0.20){
+    if(rain<0.22)return 19; // polar desert
+    return 13;               // tundra
+  }
+
+  // ── Cold (boreal): 0.20 ≤ t < 0.36 ────────────────────────────
+  if(t<0.36){
+    if(rain<0.20)return 13; // cold tundra (dry cold)
+    return 17;               // taiga / boreal forest
+  }
+
+  // ── Arid: very dry regardless of temperature ────────────────────
+  if(rain<0.17)return 14; // desert
+
+  // ── Low elevation wetlands (e < 0.50) ───────────────────────────
+  if(e<0.50){
+    if(rain>0.72&&t>0.42)return 18; // tropical swamp
+    if(rain>0.55)return 4;          // temperate wetland
+    if(t>0.62&&rain<0.32)return 6; // tropical savanna at low elevation
+    return 5;                        // plains / grassland
+  }
+
+  // ── Warm mid-elevation (0.50–0.75) ──────────────────────────────
+  if(t>0.62&&rain>0.56)return 15; // jungle
+  if(t>0.58&&rain<0.38)return 6;  // savanna
+  if(rain>0.70)return 8;          // dense temperate forest
+  if(rain>0.46)return 7;          // forest
+  if(rain>0.30)return 5;          // plains
+  if(t>0.50)return 6;             // dry savanna
+  return 5;                        // default plains
+}
+
+/* ── §9  COLOUR RAMP + BIOME TINTS ── */
+const RAMP=[[0,10,26,50],[.10,14,40,78],[.20,22,64,108],[.26,30,85,135],[.30,48,110,160],
+  [.34,188,165,105],[.40,205,182,125],[.44,115,158,75],[.50,95,150,50],[.56,78,138,40],
+  [.62,52,115,36],[.68,40,92,28],[.73,30,70,20],[.76,105,95,55],[.82,108,92,68],
+  [.87,128,115,90],[.92,148,140,125],[.96,172,165,155],[.98,215,215,215],[1,238,240,248]];
+
+/* Tints applied on top of elevation ramp (additive, biomes 0-12 keep old values) */
+const TINT=[
+  [0,0,0],       // 0  deep_ocean
+  [0,0,0],       // 1  ocean
+  [0,6,10],      // 2  coast
+  [10,6,-6],     // 3  beach
+  [-8,14,0],     // 4  wetland
+  [5,10,-5],     // 5  plains
+  [20,14,-10],   // 6  savanna
+  [-6,5,0],      // 7  forest
+  [-9,-2,0],     // 8  dense_forest
+  [7,3,-5],      // 9  hills
+  [5,0,-5],      // 10 rocky
+  [0,-2,-2],     // 11 mountain
+  [6,6,10],      // 12 snow
+  // — new biomes use BIOME_DIRECT below, tints unused for 13-19 —
+  [0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],[0,0,0],
+];
+
+/*
+  BIOME_DIRECT — flat base RGB colours for the 7 new biomes.
+  These bypass the elevation ramp entirely and are hillshaded
+  in exactly the same way as the ramp-based biomes.
+  Indexed by biome id (13-19).
+*/
+const BIOME_DIRECT = new Map([
+  [13, [115, 128,  90]],  // tundra       grey-olive
+  [14, [210, 170,  58]],  // desert       warm sandy
+  [15, [ 14,  82,  28]],  // jungle       deep tropical green
+  [16, [ 80,  22,   8]],  // volcanic     dark char-red
+  [17, [ 36,  78,  50]],  // taiga        cold blue-green
+  [18, [ 40,  62,  38]],  // swamp        dark muddy green
+  [19, [210, 232, 252]],  // ice_cap      pale arctic blue
+]);
+function sampleRamp(e){
+  for(let i=1;i<RAMP.length;i++){if(e<=RAMP[i][0]){const t=(e-RAMP[i-1][0])/(RAMP[i][0]-RAMP[i-1][0]);return[RAMP[i-1][1]+t*(RAMP[i][1]-RAMP[i-1][1]),RAMP[i-1][2]+t*(RAMP[i][2]-RAMP[i-1][2]),RAMP[i-1][3]+t*(RAMP[i][3]-RAMP[i-1][3])];}}
+  const L=RAMP[RAMP.length-1];return[L[1],L[2],L[3]];
+}
+const c255=v=>Math.max(0,Math.min(255,v))|0;
+
+/* ── §9b  TERRAIN PIXEL CACHE ────────────────────────────────────
+   Renders the full world into a 120×120 offscreen canvas (one pixel
+   per tile).  renderTerrain() then blits it to the screen with
+   hardware-accelerated scaling — far faster than per-pixel loops.
+   Smooth mode uses bilinear interpolation (ctx.imageSmoothingEnabled).
+   Grid mode uses nearest-neighbour + a thin line overlay.
+   Cache is invalidated when the world regenerates or viewMode changes.
+──────────────────────────────────────────────────────────────── */
+function buildTerrainCache() {
+  if (!elevGrid) return;
+  if (!terrainCache) {
+    terrainCache = document.createElement('canvas');
+    terrainCache.width = GRID_W; terrainCache.height = GRID_H;
+  }
+  const cctx = terrainCache.getContext('2d');
+  const img = cctx.createImageData(GRID_W, GRID_H), px = img.data;
+  for (let ty = 0; ty < GRID_H; ty++) for (let tx = 0; tx < GRID_W; tx++) {
+    const i  = ty*GRID_W+tx;
+    const e  = elevGrid[i];
+    const rain = rainfallGrid ? rainfallGrid[i] : moistGrid[i];
+    const m  = moistGrid[i], t2 = tempGrid[i], bi = biomeGrid[i];
+    let r, g, b;
+    switch (viewMode) {
+      case 'elevation':   r=g=b=e*255; break;
+      case 'moisture':    r=lrp(200,30,m);g=lrp(140,90,m);b=lrp(55,200,m); break;
+      case 'temperature': r=lrp(28,228,t2);g=lrp(58,95,t2);b=lrp(200,28,t2); break;
+      case 'rainfall':
+        if(e<0.30){r=lrp(10,28,e/0.30);g=lrp(22,55,e/0.30);b=lrp(40,95,e/0.30);}
+        else{r=lrp(235,18,rain);g=lrp(165,78,rain);b=lrp(28,210,rain);const sf=.45+shadeGrid[i]*.65;r*=sf;g*=sf;b*=sf;}
+        break;
+      case 'wind':
+        if(e<0.30){r=lrp(8,22,e/0.30);g=lrp(18,45,e/0.30);b=lrp(32,80,e/0.30);}
+        else{r=lrp(200,14,rain)*.70;g=lrp(140,65,rain)*.70;b=lrp(24,175,rain)*.70;const sf=.45+shadeGrid[i]*.65;r*=sf;g*=sf;b*=sf;}
+        break;
+      default: {
+        const direct = BIOME_DIRECT.get(bi);
+        if (direct) { [r,g,b] = direct; }
+        else { const bs=sampleRamp(e),ti=TINT[bi]||[0,0,0]; r=bs[0]+ti[0];g=bs[1]+ti[1];b=bs[2]+ti[2]; }
+        const iw = e < 0.30;
+        const sf = iw ? .70+shadeGrid[i]*.30 : .26+shadeGrid[i]*.84;
+        r *= sf; g *= sf; b *= sf;
+        if (iw && shadeGrid[i] > .88) { const sp=((shadeGrid[i]-.88)/.12)*32; r+=sp;g+=sp*.86;b+=sp*.75; }
+      }
+    }
+    const pidx = i*4;
+    px[pidx]=c255(r); px[pidx+1]=c255(g); px[pidx+2]=c255(b); px[pidx+3]=255;
+  }
+  cctx.putImageData(img, 0, 0);
+  terrainCacheMode = viewMode;
+}
+
+/* ── §10  RIVER SYSTEM ── */
+class MinHeap{
+  constructor(){this._h=[];}
+  push(p,v){this._h.push([p,v]);this._up(this._h.length-1);}
+  pop(){const t=this._h[0],l=this._h.pop();if(this._h.length){this._h[0]=l;this._dn(0);}return t;}
+  get size(){return this._h.length;}
+  _up(i){while(i>0){const p=(i-1)>>1;if(this._h[p][0]<=this._h[i][0])break;[this._h[p],this._h[i]]=[this._h[i],this._h[p]];i=p;}}
+  _dn(i){const n=this._h.length;while(true){let s=i,l=2*i+1,r=2*i+2;if(l<n&&this._h[l][0]<this._h[s][0])s=l;if(r<n&&this._h[r][0]<this._h[s][0])s=r;if(s===i)break;[this._h[s],this._h[i]]=[this._h[i],this._h[s]];i=s;}}
+}
+const D8=[[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]];
+
+function fillDepressions(){
+  const tot=GRID_W*GRID_H,SEA=.30,TINY=1e-5,fill=new Float32Array(elevGrid),inQ=new Uint8Array(tot),hp=new MinHeap();
+  for(let ty=0;ty<GRID_H;ty++)for(let tx=0;tx<GRID_W;tx++){const i=ty*GRID_W+tx,b=tx===0||ty===0||tx===GRID_W-1||ty===GRID_H-1;if(elevGrid[i]<SEA||b){fill[i]=elevGrid[i];inQ[i]=1;hp.push(fill[i],i);}else fill[i]=Infinity;}
+  while(hp.size>0){const[,idx]=hp.pop(),tx=idx%GRID_W,ty=(idx/GRID_W)|0;for(const[dx,dy]of D8){const nx=tx+dx,ny=ty+dy;if(nx<0||ny<0||nx>=GRID_W||ny>=GRID_H)continue;const ni=ny*GRID_W+nx;if(inQ[ni])continue;const nf=Math.max(elevGrid[ni],fill[idx]+TINY);if(nf<fill[ni]){fill[ni]=nf;inQ[ni]=1;hp.push(fill[ni],ni);}}}
+  return fill;
+}
+function buildFlowDir(fill){
+  const tot=GRID_W*GRID_H,fd2=new Uint8Array(tot).fill(255);
+  for(let ty=0;ty<GRID_H;ty++)for(let tx=0;tx<GRID_W;tx++){const i=ty*GRID_W+tx;if(fill[i]<.30)continue;let best=0,bd=255;for(let d=0;d<8;d++){const nx=tx+D8[d][0],ny=ty+D8[d][1];if(nx<0||ny<0||nx>=GRID_W||ny>=GRID_H)continue;const dist=(D8[d][0]!==0&&D8[d][1]!==0)?Math.SQRT2:1,drop=(fill[i]-fill[ny*GRID_W+nx])/dist;if(drop>best){best=drop;bd=d;}}fd2[i]=bd;}
+  return fd2;
+}
+function buildFlowAcc(fill,fd2){
+  const tot=GRID_W*GRID_H,acc=new Float32Array(tot).fill(1);
+  const ord=Array.from({length:tot},(_,i)=>i).sort((a,b)=>fill[b]-fill[a]);
+  for(const i of ord){const d=fd2[i];if(d===255)continue;const tx=i%GRID_W,ty=(i/GRID_W)|0,nx=tx+D8[d][0],ny=ty+D8[d][1];if(nx>=0&&ny>=0&&nx<GRID_W&&ny<GRID_H)acc[ny*GRID_W+nx]+=acc[i];}
+  return acc;
+}
+function selectSources(fill,rng){
+  const cnt=+sl.rv.value,minE=+sl.rs.value/100,MSP=Math.floor(GRID_W/(Math.sqrt(cnt)*1.4));
+  const cands=[];for(let i=0;i<GRID_W*GRID_H;i++)if(elevGrid[i]>=minE&&fill[i]>=minE)cands.push(i);
+  for(let i=cands.length-1;i>0;i--){const j=(rng()*(i+1))|0;[cands[i],cands[j]]=[cands[j],cands[i]];}
+  const srcs=[],ch=[];
+  for(const ci of cands){if(srcs.length>=cnt)break;const cx=ci%GRID_W,cy=(ci/GRID_W)|0;let ok=true;for(const si of ch){const sx=si%GRID_W,sy=(si/GRID_W)|0;if(Math.sqrt((cx-sx)**2+(cy-sy)**2)<MSP){ok=false;break;}}if(ok){srcs.push(ci);ch.push(ci);}}
+  return srcs;
+}
+function traceRiver(src,fd2,acc,fill){
+  const SEA=.30,minLen=+sl.rl.value,path=[],vis=new Set();let idx=src;
+  for(let s=0;s<GRID_W*GRID_H;s++){if(vis.has(idx))break;vis.add(idx);const tx=idx%GRID_W,ty=(idx/GRID_W)|0;path.push({x:tx,y:ty,flow:acc[idx]});if(fill[idx]<SEA)break;const d=fd2[idx];if(d===255)break;const nx=tx+D8[d][0],ny=ty+D8[d][1];if(nx<0||ny<0||nx>=GRID_W||ny>=GRID_H)break;idx=ny*GRID_W+nx;}
+  if(path.length<minLen)return null;const last=path[path.length-1];if(fill[last.y*GRID_W+last.x]>SEA+.08)return null;
+  return{rawPath:path,maxFlow:Math.max(...path.map(p=>p.flow))};
+}
+function chaikin(pts,it=3){let o=pts.slice();for(let k=0;k<it;k++){const n=[o[0]];for(let i=0;i<o.length-1;i++){const p0=o[i],p1=o[i+1];n.push({x:p0.x*.75+p1.x*.25,y:p0.y*.75+p1.y*.25,flow:p0.flow},{x:p0.x*.25+p1.x*.75,y:p0.y*.25+p1.y*.75,flow:p1.flow});}n.push(o[o.length-1]);o=n;}return o;}
+function generateRivers(seed){
+  rivers=[];riverTileSet=new Set();filledElev=fillDepressions();flowDir=buildFlowDir(filledElev);flowAccum=buildFlowAcc(filledElev,flowDir);
+  const rng=mkRNG(seed^0xabcdef);
+  for(const src of selectSources(filledElev,rng)){const rv=traceRiver(src,flowDir,flowAccum,filledElev);if(!rv)continue;rivers.push({pts:chaikin(rv.rawPath,3),maxFlow:rv.maxFlow});for(const pt of rv.rawPath)riverTileSet.add(pt.y*GRID_W+pt.x);}
+}
+
+/* ── §11  FANTASY NAMES ── */
+const CAP=['Ash','Elm','Thorn','Silver','Iron','Dawn','Storm','Gold','Moon','Raven','Oak','Stone','Frost','Shadow','Mist','High','Hollow','Bright','Dark','Grim','Bone','Ember','Cinder','Vale','Dusk','Black','Red','White','Amber','Swan'];
+const CAS=['ford','haven','wick','keep','hold','gate','bridge','tor','moor','field','wood','ridge','fell','march','stead','port','vale','hall','cross','well','mere','watch','cliff','crest','dale','holm','pass','falls','bane','rest'];
+const CBP=['Val','Mor','Kar','Sil','Dun','Vor','Cal','Bran','Wyn','Helm','Eld','Fen','Orm','Grim','Ith','Kern','Loch','Mith','Roth','Thor','Ulm','Thal','Aes','Arn','Bryn','Dael','Fir','Gor','Hal','Jyn'];
+const CBM=['or','an','eth','ald','en','um','wyn','ath','ar','el','im','aen','ost','ern','al','in','is'];
+const CBS=['dale','holm','burg','port','vale','mere','moor','tor','crest','fell','wick','stead','hold','ford','gate','keep','bridge','cross','haven','watch'];
+const KS1=['Aeld','Vald','Khal','Sol','Morth','Eld','Dral','Syn','Bael','Vor','Eth','Orm','Hel','Tyr','Cal','Var','Aer','Rath','Orn','Dur','Vel','Zar','Neth','Gar','Wyn'];
+const KS2=['or','an','ia','eth','ur','al','en','im','oth','ar','el','is','us','on','um','in','os','ael','yl','ash'];
+const KS3=['ia','or','ath','en','ar','is','mar','dor','wyn','fel','heim','dris','thar','mon','ris','tur','var','goth','ros','din'];
+const KTITLE=['Kingdom of','Empire of','Realm of','Dominion of','Sovereignty of'];
+function genCityName(rng){
+  const used=genCityName._u||(genCityName._u=new Set());
+  for(let a=0;a<20;a++){let n;if(rng()<.58)n=CAP[(rng()*CAP.length)|0]+CAS[(rng()*CAS.length)|0];else{const m=rng()<.5?CBM[(rng()*CBM.length)|0]:'';n=CBP[(rng()*CBP.length)|0]+m+CBS[(rng()*CBS.length)|0];}if(!used.has(n)){used.add(n);return n;}}
+  return CAP[(rng()*CAP.length)|0]+CAS[(rng()*CAS.length)|0];
+}
+function genKingdomName(rng){
+  const used=genKingdomName._u||(genKingdomName._u=new Set());
+  let name='';for(let a=0;a<20;a++){name=KS1[(rng()*KS1.length)|0]+KS2[(rng()*KS2.length)|0]+KS3[(rng()*KS3.length)|0];if(!used.has(name)){used.add(name);break;}}
+  return{name,fullName:KTITLE[(rng()*KTITLE.length)|0]+' '+name};
+}
+
+/* ── §12  KINGDOM PALETTE ── */
+const KP=[[210,55,55],[200,155,20],[95,55,210],[25,180,135],[215,90,22],[50,115,215]];
+//                      0     1     2    3   4   5   6   7   8   9  10    11   12    13   14  15   16   17   18    19
+const BIOME_CITY_SCORE=[-999,-999,-999, -4,  2, 10,  8,  6,  3,  4, -2, -999,-999,  -3,  -5,  2, -999,  4,  -1, -999];
+
+/* ── §13  CIVILIZATION GENERATION ── */
+function generateCivilizations(seed){
+  cities=[];kingdoms=[];territoryGrid=null;cityByTile=new Map();
+  genCityName._u=new Set();genKingdomName._u=new Set();
+  const rng=mkRNG(seed^0x1234cafe);
+  const numCities=+sl.ci.value,numKingdoms=+sl.ki.value;
+  const tot=GRID_W*GRID_H;
+  // Score tiles
+  const scores=new Float32Array(tot).fill(-9999);
+  for(let i=0;i<tot;i++){const b=BIOME_CITY_SCORE[biomeGrid[i]];if(b<=-999)continue;scores[i]=b+(riverTileSet.has(i)?6:0)+(rng()-.5)*1.5;}
+  // Sort candidates
+  const cands=[];for(let i=0;i<tot;i++)if(scores[i]>-999)cands.push(i);
+  cands.sort((a,b)=>scores[b]-scores[a]);
+  const MINSP=Math.max(8,Math.floor(GRID_W/(Math.sqrt(numCities)*1.3)));
+  const placed=[];
+  for(const ci of cands){
+    if(cities.length>=numCities)break;
+    const cx=ci%GRID_W,cy=(ci/GRID_W)|0;
+    let ok=true;for(const pi of placed){const px=pi%GRID_W,py=(pi/GRID_W)|0;if(Math.sqrt((cx-px)**2+(cy-py)**2)<MINSP){ok=false;break;}}
+    if(!ok)continue;placed.push(ci);cities.push({x:cx,y:cy,name:genCityName(rng),score:scores[ci],kingdomIdx:-1,isCapital:false});
+  }
+  if(!cities.length){return;}
+  // Spread capitals
+  const K=Math.min(numKingdoms,cities.length),capIdxs=[0];
+  while(capIdxs.length<K){let bd=-1,bi=-1;for(let i=0;i<cities.length;i++){if(capIdxs.includes(i))continue;const c=cities[i];let minD=Infinity;for(const ci of capIdxs){const cap=cities[ci];minD=Math.min(minD,Math.sqrt((c.x-cap.x)**2+(c.y-cap.y)**2));}if(minD>bd){bd=minD;bi=i;}}if(bi<0)break;capIdxs.push(bi);}
+  // Build kingdoms
+  kingdoms=capIdxs.map((ci,ki)=>{cities[ci].isCapital=true;cities[ci].kingdomIdx=ki;const{name,fullName}=genKingdomName(rng);const[r,g,b]=KP[ki%KP.length];return{name,fullName,r,g,b,capCityIdx:ci,cities:[ci],centX:0,centY:0,tileCount:0};});
+  // Assign cities
+  for(let i=0;i<cities.length;i++){if(capIdxs.includes(i))continue;const c=cities[i];let minD=Infinity,bk=0;for(const ci of capIdxs){const cap=cities[ci],d=Math.sqrt((c.x-cap.x)**2+(c.y-cap.y)**2);if(d<minD){minD=d;bk=capIdxs.indexOf(ci);}}c.kingdomIdx=bk;kingdoms[bk].cities.push(i);}
+  // Voronoi territory
+  territoryGrid=new Int16Array(GRID_W*GRID_H).fill(-1);
+  for(let ty=0;ty<GRID_H;ty++)for(let tx=0;tx<GRID_W;tx++){const i=ty*GRID_W+tx;if(elevGrid[i]<.30)continue;let minD=Infinity,near=0;for(const ci of capIdxs){const cap=cities[ci],d=Math.sqrt((tx-cap.x)**2+(ty-cap.y)**2);if(d<minD){minD=d;near=capIdxs.indexOf(ci);}}territoryGrid[i]=near;}
+  // Centroids
+  const sx=new Float64Array(K),sy2=new Float64Array(K),cnt=new Int32Array(K);
+  for(let ty=0;ty<GRID_H;ty++)for(let tx=0;tx<GRID_W;tx++){const ki=territoryGrid[ty*GRID_W+tx];if(ki<0)continue;sx[ki]+=tx;sy2[ki]+=ty;cnt[ki]++;}
+  for(let ki=0;ki<K;ki++){kingdoms[ki].centX=cnt[ki]>0?sx[ki]/cnt[ki]:0;kingdoms[ki].centY=cnt[ki]>0?sy2[ki]/cnt[ki]:0;kingdoms[ki].tileCount=cnt[ki];}
+  // City lookup
+  for(const city of cities)cityByTile.set(city.y*GRID_W+city.x,city);
+}
+
+/* ── §13b  ROAD NETWORK ─────────────────────────────────────────────
+   Procedural roads are built with A* pathfinding using a terrain-cost
+   function that accounts for biome type, slope steepness, and a
+   corridor-reuse discount (roads prefer to merge into existing routes).
+
+   Road hierarchy:
+     • Major roads  — minimum spanning tree (Prim) between all capitals
+     • Minor roads  — each non-capital city routes to its nearest capital
+
+   Biome road cost (lower = easier to build through):
+     Plains 1.0 → Forest 1.4 → Hills 2.2 → Mountain 5.5
+     Ocean / Ice = impassable
+──────────────────────────────────────────────────────────────── */
+const ROAD_BIOME_COST=[
+  Infinity,Infinity,Infinity,  // 0-2  ocean
+  1.8,   // 3  beach
+  2.8,   // 4  wetland
+  1.0,   // 5  plains  ← cheapest land biome
+  1.1,   // 6  savanna
+  1.4,   // 7  forest
+  1.9,   // 8  dense forest
+  2.2,   // 9  hills
+  3.0,   // 10 rocky
+  5.5,   // 11 mountain
+  4.5,   // 12 snow
+  1.6,   // 13 tundra
+  1.5,   // 14 desert
+  2.5,   // 15 jungle
+  7.0,   // 16 volcanic
+  1.5,   // 17 taiga
+  3.5,   // 18 swamp
+  Infinity, // 19 ice cap
+];
+
+function roadAStar(x0,y0,x1,y1){
+  if(x0===x1&&y0===y1)return[{x:x0,y:y0}];
+  const tot=GRID_W*GRID_H, goal=y1*GRID_W+x1, start=y0*GRID_W+x0;
+  const gScore=new Float32Array(tot).fill(Infinity);
+  const prev=new Int32Array(tot).fill(-1);
+  gScore[start]=0;
+  // Admissible heuristic: Euclidean * 0.9 (slightly inadmissible for speed)
+  const heur=i=>{const tx=i%GRID_W,ty=(i/GRID_W)|0;return Math.sqrt((tx-x1)**2+(ty-y1)**2)*0.88;};
+  const pq=new MinHeap();pq.push(heur(start),start);
+  let iters=0;
+  while(pq.size>0&&iters++<tot*5){
+    const[,cur]=pq.pop();
+    if(cur===goal)break;
+    const gcur=gScore[cur];if(gcur===Infinity)continue;
+    const cx=cur%GRID_W,cy=(cur/GRID_W)|0;
+    for(const[dx,dy]of D8){
+      const nx=cx+dx,ny=cy+dy;
+      if(nx<0||ny<0||nx>=GRID_W||ny>=GRID_H)continue;
+      const ni=ny*GRID_W+nx;
+      if(elevGrid[ni]<0.30)continue;          // no roads through ocean
+      const bc=ROAD_BIOME_COST[biomeGrid[ni]];
+      if(!isFinite(bc))continue;
+      // Slope penalty: climbing is expensive, descending is free
+      const slope=Math.max(0,(elevGrid[ni]-elevGrid[cur])*20);
+      // Existing road discount: share corridors where possible
+      const reuse=roadTileSet.has(ni)?0.46:1.0;
+      const dist=dx!==0&&dy!==0?Math.SQRT2:1;
+      const ng=gcur+(bc+slope)*dist*reuse;
+      if(ng<gScore[ni]){gScore[ni]=ng;prev[ni]=cur;pq.push(ng+heur(ni),ni);}
+    }
+  }
+  if(gScore[goal]===Infinity)return null;
+  const path=[];let cur=goal;
+  while(cur!==-1){path.unshift({x:cur%GRID_W,y:(cur/GRID_W)|0});cur=prev[cur];}
+  return path.length>1?path:null;
+}
+
+function generateRoads(){
+  roads=[];roadTileSet=new Set();
+  if(!cities.length||!kingdoms.length)return;
+
+  const caps=kingdoms.map(k=>cities[k.capCityIdx]).filter(Boolean);
+
+  // ── Major roads: Prim MST connecting all capitals ──────────────
+  if(caps.length>1){
+    const inTree=new Set([caps[0]]);
+    const queue=[...caps.slice(1)];
+    while(queue.length>0){
+      let bestPath=null,bestCost=Infinity,bestIdx=-1;
+      for(let qi=0;qi<queue.length;qi++){
+        const to=queue[qi];
+        for(const from of inTree){
+          const path=roadAStar(from.x,from.y,to.x,to.y);
+          if(!path)continue;
+          if(path.length<bestCost){bestCost=path.length;bestPath=path;bestIdx=qi;}
+        }
+      }
+      if(bestIdx<0)break;
+      roads.push({path:bestPath,isMajor:true});
+      bestPath.forEach(p=>roadTileSet.add(p.y*GRID_W+p.x));
+      inTree.add(queue[bestIdx]);
+      queue.splice(bestIdx,1);
+    }
+  }
+
+  // ── Minor roads: every non-capital → its nearest capital ───────
+  const nonCaps=cities.filter(c=>!c.isCapital);
+  for(const city of nonCaps){
+    let nearCap=null,nearD=Infinity;
+    for(const cap of caps){
+      const d=Math.sqrt((city.x-cap.x)**2+(city.y-cap.y)**2);
+      if(d<nearD){nearD=d;nearCap=cap;}
+    }
+    if(!nearCap)continue;
+    const path=roadAStar(city.x,city.y,nearCap.x,nearCap.y);
+    if(path){roads.push({path,isMajor:false});path.forEach(p=>roadTileSet.add(p.y*GRID_W+p.x));}
+  }
+}
+function resizeCvs(){
+  const w=wrap.clientWidth,h=wrap.clientHeight;
+  canvas.width=rCvs.width=civCvs.width=w;
+  canvas.height=rCvs.height=civCvs.height=h;
+}
+
+function renderTerrain(){
+  const cW=canvas.width,cH=canvas.height;
+  if(!cW||!cH||!elevGrid)return;
+
+  // Rebuild cache if stale (first render, mode changed, or new world)
+  if(!terrainCache||terrainCacheMode!==viewMode) buildTerrainCache();
+
+  // Clear void background
+  ctx.fillStyle='#050709';
+  ctx.fillRect(0,0,cW,cH);
+
+  // ── Blit terrain cache — hardware-accelerated bilinear / nearest ──
+  ctx.imageSmoothingEnabled = !gridMode;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(terrainCache, 0, 0, GRID_W, GRID_H,
+    cam.panX, cam.panY, cam.zoom*cW, cam.zoom*cH);
+
+  // ── Grid lines overlay (only when gridMode + zoomed in enough) ────
+  if(gridMode && cam.zoom > 0.55){
+    const w=stW(), h=stH(), {tx0,ty0,tx1,ty1}=visRange();
+    const alpha = Math.min(0.35, (cam.zoom-0.55)*0.55);
+    ctx.strokeStyle = `rgba(0,0,0,${alpha.toFixed(2)})`;
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    for(let tx=tx0;tx<=tx1+1;tx++){const x=cam.panX+tx*w;ctx.moveTo(x,0);ctx.lineTo(x,cH);}
+    for(let ty=ty0;ty<=ty1+1;ty++){const y=cam.panY+ty*h;ctx.moveTo(0,y);ctx.lineTo(cW,y);}
+    ctx.stroke();
+  }
+
+  // ── Wind arrows overlay (wind mode only) ─────────────────────────
+  if(viewMode==='wind'&&windXGrid){
+    const STEP=10,aw=stW(),ah=stH();
+    ctx.save();ctx.lineCap='round';
+    for(let gty=STEP*.5;gty<GRID_H;gty+=STEP){
+      for(let gtx=STEP*.5;gtx<GRID_W;gtx+=STEP){
+        const ti=(Math.round(gty)|0)*GRID_W+(Math.round(gtx)|0);
+        if(ti<0||ti>=windXGrid.length)continue;
+        const wdx=windXGrid[ti],wdy=windYGrid[ti];
+        const speed=Math.sqrt(wdx*wdx+wdy*wdy);
+        if(speed<0.05)continue;
+        const sx2=cam.panX+(gtx+.5)*aw,sy2=cam.panY+(gty+.5)*ah;
+        if(sx2<-20||sy2<-20||sx2>cW+20||sy2>cH+20)continue;
+        const len=Math.min(aw,ah)*STEP*.40;
+        const angle=Math.atan2(wdy,wdx);
+        const ex=sx2+Math.cos(angle)*len*.55,ey=sy2+Math.sin(angle)*len*.55;
+        const sx0=sx2-Math.cos(angle)*len*.45,sy0=sy2-Math.sin(angle)*len*.45;
+        const lat=Math.abs(gty/GRID_H-.5)*2;
+        const al=(.50+lat*.25).toFixed(2);
+        const col=lat<.22?`rgba(255,230,80,${al})`:lat<.65?`rgba(220,255,200,${al})`:`rgba(180,220,255,${al})`;
+        ctx.strokeStyle=col;ctx.lineWidth=1.1;
+        ctx.beginPath();ctx.moveTo(sx0,sy0);ctx.lineTo(ex,ey);ctx.stroke();
+        const hl=len*.24;ctx.lineWidth=1.0;
+        ctx.beginPath();ctx.moveTo(ex,ey);
+        ctx.lineTo(ex-Math.cos(angle-.48)*hl,ey-Math.sin(angle-.48)*hl);
+        ctx.moveTo(ex,ey);
+        ctx.lineTo(ex-Math.cos(angle+.48)*hl,ey-Math.sin(angle+.48)*hl);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  const ML={terrain:'Terrain View',elevation:'Elevation Map',moisture:'Base Moisture',
+             temperature:'Temperature',rainfall:'Rainfall Map',wind:'Wind & Rainfall'};
+  modeBadge.textContent = ML[viewMode]||viewMode;
+}
+
+/* ── §15b  MINIMAP ─────────────────────────────────────────────────
+   A 150×150 overview canvas pinned to the bottom-right corner.
+   Blits the terrain cache (1px/tile), then overlays:
+     • Road tiles as faint amber dots
+     • City markers (capitals 3px, towns 2px)
+     • Animated dashed viewport rectangle showing current view
+──────────────────────────────────────────────────────────────── */
+const minimapCvs = document.getElementById('minimapCvs');
+const minimapCtx = minimapCvs ? minimapCvs.getContext('2d') : null;
+
+function renderMinimap(){
+  if(!minimapCtx||!terrainCache||!elevGrid)return;
+  const mW=minimapCvs.width, mH=minimapCvs.height;
+  minimapCtx.clearRect(0,0,mW,mH);
+
+  // Terrain layer
+  minimapCtx.imageSmoothingEnabled=false;
+  minimapCtx.drawImage(terrainCache,0,0,mW,mH);
+
+  // Road dots
+  if(roadsVisible&&roadTileSet.size){
+    const sx=mW/GRID_W, sy=mH/GRID_H;
+    minimapCtx.fillStyle='rgba(200,155,70,.55)';
+    for(const idx of roadTileSet){
+      minimapCtx.fillRect((idx%GRID_W)*sx-.4,((idx/GRID_W)|0)*sy-.4,1.4,1.4);
+    }
+  }
+
+  // City dots
+  if(cities.length){
+    const sx=mW/GRID_W, sy=mH/GRID_H;
+    for(const city of cities){
+      const kg=kingdoms[city.kingdomIdx];if(!kg)continue;
+      minimapCtx.fillStyle=city.isCapital?`rgb(${kg.r},${kg.g},${kg.b})`:`rgba(${kg.r},${kg.g},${kg.b},.7)`;
+      const s=city.isCapital?3.2:2;
+      minimapCtx.fillRect(city.x*sx-s/2, city.y*sy-s/2, s, s);
+    }
+  }
+
+  // Pin markers
+  if(notesDB&&Object.keys(notesDB.tiles).length){
+    const sx=mW/GRID_W, sy=mH/GRID_H;
+    minimapCtx.fillStyle='rgba(200,170,255,.85)';
+    for(const key of Object.keys(notesDB.tiles)){
+      const[ptx,pty]=key.split(',').map(Number);
+      minimapCtx.beginPath();
+      minimapCtx.arc(ptx*sx+sx/2, pty*sy+sy/2, 2, 0, Math.PI*2);
+      minimapCtx.fill();
+    }
+  }
+
+  // Viewport rectangle
+  const cW=canvas.width, cH=canvas.height;
+  const tw=stW(), th=stH();
+  const msx=mW/GRID_W, msy=mH/GRID_H;
+  const vx=(-cam.panX/tw)*msx, vy=(-cam.panY/th)*msy;
+  const vw=(cW/tw)*msx,        vh=(cH/th)*msy;
+  // Clamp rect within minimap
+  const rx=Math.max(0,Math.min(mW-1,vx));
+  const ry=Math.max(0,Math.min(mH-1,vy));
+  const rw=Math.min(mW-rx, vw);
+  const rh=Math.min(mH-ry, vh);
+  minimapCtx.strokeStyle='rgba(255,255,255,.72)';
+  minimapCtx.lineWidth=1; minimapCtx.setLineDash([3,2]);
+  minimapCtx.strokeRect(rx,ry,rw,rh);
+  minimapCtx.setLineDash([]);
+
+  // Border
+  minimapCtx.strokeStyle='rgba(74,179,232,.32)';
+  minimapCtx.lineWidth=1;
+  minimapCtx.strokeRect(.5,.5,mW-1,mH-1);
+}
+function renderRivers(){
+  const cW=rCvs.width,cH=rCvs.height;
+  rCtx.clearRect(0,0,cW,cH);
+  if(!riversVisible||!rivers.length)return;
+  const w=stW(),h=stH();
+  const toX=tx=>cam.panX+(tx+.5)*w, toY=ty=>cam.panY+(ty+.5)*h;
+  let gmax=0;for(const rv of rivers)gmax=Math.max(gmax,rv.maxFlow);
+  if(!gmax)return;
+  for(const river of rivers){
+    const pts=river.pts;if(pts.length<2)continue;
+    const px=pts.map(p=>toX(p.x)),py=pts.map(p=>toY(p.y));
+    // Glow
+    rCtx.save();rCtx.filter='blur(2.5px)';
+    rCtx.beginPath();rCtx.moveTo(px[0],py[0]);
+    for(let i=1;i<pts.length-1;i++)rCtx.quadraticCurveTo(px[i],py[i],(px[i]+px[i+1])*.5,(py[i]+py[i+1])*.5);
+    rCtx.lineTo(px[pts.length-1],py[pts.length-1]);
+    rCtx.strokeStyle='rgba(80,185,240,.18)';rCtx.lineWidth=(1.5+Math.sqrt(river.maxFlow/gmax)*6)*1.8;rCtx.lineCap='round';rCtx.stroke();
+    rCtx.filter='none';rCtx.restore();
+    // Core
+    for(let i=1;i<pts.length;i++){
+      const af=(pts[i-1].flow+pts[i].flow)*.5,ww=Math.max(.5,Math.min(4.5,.5+Math.sqrt(af/(gmax*.015))));
+      const tt=i/(pts.length-1),rc=lrp(120,40,tt)|0,gc=lrp(195,120,tt)|0,bc2=lrp(245,200,tt)|0;
+      const al=Math.min(.92,.5+tt*.35+Math.min(1,ww/3)*.15);
+      rCtx.beginPath();rCtx.moveTo(px[i-1],py[i-1]);rCtx.lineTo(px[i],py[i]);
+      rCtx.strokeStyle=`rgba(${rc},${gc},${bc2},${al.toFixed(2)})`;rCtx.lineWidth=ww;rCtx.lineCap='round';rCtx.stroke();
+    }
+  }
+}
+
+/* ── §16  CIVILIZATION RENDERING (camera-aware) ── */
+function renderCivilizations(){
+  const cW=civCvs.width,cH=civCvs.height;
+  civCtx.clearRect(0,0,cW,cH);
+  if(!kingdoms.length||!territoryGrid)return;
+
+  const w=stW(),h=stH();
+  const {tx0,ty0,tx1,ty1}=visRange();
+  const toSX=tx=>cam.panX+tx*w, toSY=ty=>cam.panY+ty*h;
+  const tW2=Math.ceil(w)+1, tH2=Math.ceil(h)+1;
+
+  if(civVisible){
+    /* ── Pass 0: road network ─────────────────────────────────── */
+    if(roadsVisible&&roads.length){
+      const w=stW(),h=stH();
+      const toX=tx=>cam.panX+(tx+.5)*w, toY=ty=>cam.panY+(ty+.5)*h;
+      for(const road of roads){
+        if(road.path.length<2)continue;
+        // Screen-space cull: skip roads with no visible point
+        const vis=road.path.some(p=>{const sx=toX(p.x),sy=toY(p.y);return sx>-8&&sy>-8&&sx<cW+8&&sy<cH+8;});
+        if(!vis)continue;
+        // Chaikin-smooth the raw A* path (2 iterations)
+        const smooth=chaikin(road.path.map(p=>({x:p.x,y:p.y,flow:0})),2);
+        civCtx.save();
+        if(road.isMajor){
+          civCtx.strokeStyle='rgba(205,158,78,.82)';
+          civCtx.lineWidth=Math.max(1.1,2.6*Math.min(1.8,cam.zoom));
+          civCtx.shadowColor='rgba(0,0,0,.50)';civCtx.shadowBlur=3.5;
+        } else {
+          civCtx.strokeStyle='rgba(168,122,52,.58)';
+          civCtx.lineWidth=Math.max(.7,1.5*Math.min(1.8,cam.zoom));
+          civCtx.shadowColor='rgba(0,0,0,.40)';civCtx.shadowBlur=2;
+        }
+        civCtx.lineCap='round';civCtx.lineJoin='round';
+        civCtx.beginPath();
+        civCtx.moveTo(toX(smooth[0].x),toY(smooth[0].y));
+        for(let si=1;si<smooth.length-1;si++){
+          const mx=toX(smooth[si].x),my=toY(smooth[si].y);
+          const nx=toX(smooth[si+1].x),ny=toY(smooth[si+1].y);
+          civCtx.quadraticCurveTo(mx,my,(mx+nx)*.5,(my+ny)*.5);
+        }
+        civCtx.lineTo(toX(smooth[smooth.length-1].x),toY(smooth[smooth.length-1].y));
+        civCtx.stroke();
+        civCtx.restore();
+      }
+    }
+
+    /* Pass 1: territory fills */
+    for(const[ki,kg]of kingdoms.entries()){
+      civCtx.fillStyle=`rgba(${kg.r},${kg.g},${kg.b},.11)`;
+      for(let ty=ty0;ty<=ty1;ty++)for(let tx=tx0;tx<=tx1;tx++){
+        if(territoryGrid[ty*GRID_W+tx]===ki)civCtx.fillRect(toSX(tx),toSY(ty),tW2,tH2);
+      }
+    }
+    /* Pass 2: borders */
+    const segs=kingdoms.map(()=>[]);
+    for(let ty=ty0;ty<=ty1;ty++)for(let tx=tx0;tx<=tx1;tx++){
+      const ki=territoryGrid[ty*GRID_W+tx];if(ki<0)continue;
+      if(tx<GRID_W-1){const ek=territoryGrid[ty*GRID_W+tx+1];if(ek>=0&&ek!==ki){const bx=toSX(tx+1);segs[ki].push(bx,toSY(ty),bx,toSY(ty+1));}}
+      if(ty<GRID_H-1){const sk=territoryGrid[(ty+1)*GRID_W+tx];if(sk>=0&&sk!==ki){const by=toSY(ty+1);segs[ki].push(toSX(tx),by,toSX(tx+1),by);}}
+    }
+    for(const[ki,kg]of kingdoms.entries()){
+      if(!segs[ki].length)continue;
+      civCtx.strokeStyle=`rgba(${kg.r},${kg.g},${kg.b},.75)`;civCtx.lineWidth=1.8;civCtx.lineCap='square';
+      civCtx.beginPath();const s=segs[ki];for(let i=0;i<s.length;i+=4){civCtx.moveTo(s[i],s[i+1]);civCtx.lineTo(s[i+2],s[i+3]);}civCtx.stroke();
+    }
+    /* Pass 3: city markers */
+    const mScale=Math.min(1.6,Math.max(.7,Math.sqrt(cam.zoom)));
+    for(const city of cities){
+      const px2=cam.panX+(city.x+.5)*w, py2=cam.panY+(city.y+.5)*h;
+      // Off-screen cull
+      if(px2<-20||py2<-20||px2>cW+20||py2>cH+20)continue;
+      const kg=kingdoms[city.kingdomIdx];if(!kg)continue;
+      const{r,g,b}=kg;
+      if(city.isCapital){
+        civCtx.beginPath();civCtx.arc(px2,py2,10*mScale,0,Math.PI*2);civCtx.fillStyle=`rgba(${r},${g},${b},.18)`;civCtx.fill();
+        civCtx.beginPath();civCtx.arc(px2,py2,7*mScale,0,Math.PI*2);civCtx.strokeStyle=`rgb(${r},${g},${b})`;civCtx.lineWidth=2.2;civCtx.stroke();
+        civCtx.fillStyle='rgba(255,252,230,.96)';civCtx.fill();
+        civCtx.beginPath();civCtx.arc(px2,py2,2.2*mScale,0,Math.PI*2);civCtx.fillStyle=`rgb(${r},${g},${b})`;civCtx.fill();
+        civCtx.font=`bold ${Math.round(9*mScale)}px serif`;civCtx.textAlign='center';civCtx.textBaseline='middle';
+        civCtx.fillStyle=`rgba(${r},${g},${b},.9)`;civCtx.fillText('★',px2,py2-11*mScale);
+      } else {
+        civCtx.beginPath();civCtx.arc(px2,py2,6*mScale,0,Math.PI*2);civCtx.fillStyle=`rgba(${r},${g},${b},.2)`;civCtx.fill();
+        civCtx.beginPath();civCtx.arc(px2,py2,4.5*mScale,0,Math.PI*2);civCtx.strokeStyle=`rgba(${r},${g},${b},.9)`;civCtx.lineWidth=1.8;civCtx.stroke();
+        civCtx.fillStyle='rgba(255,252,230,.92)';civCtx.fill();
+        civCtx.beginPath();civCtx.arc(px2,py2,1.6*mScale,0,Math.PI*2);civCtx.fillStyle=`rgba(${r},${g},${b},.8)`;civCtx.fill();
+      }
+    }
+    /* Pass 4: labels */
+    const labelScale=Math.min(1.4,Math.max(.85,cam.zoom*.7));
+    civCtx.textBaseline='top';civCtx.textAlign='center';
+    civCtx.font=`bold ${Math.round(7.5*labelScale)}px "Cinzel",serif`;
+    for(const city of cities){
+      const px2=cam.panX+(city.x+.5)*w, py2=cam.panY+(city.y+.5)*h;
+      if(px2<-60||py2<-20||px2>cW+60||py2>cH+20)continue;
+      const yOff=city.isCapital?14*mScale:9*mScale;
+      civCtx.fillStyle='rgba(5,7,9,.75)';civCtx.fillText(city.name,px2+.5,py2+yOff+.5);
+      civCtx.fillStyle='rgba(255,250,210,.96)';civCtx.fillText(city.name,px2,py2+yOff);
+    }
+    civCtx.font=`bold ${Math.round(10*labelScale)}px "Cinzel",serif`;civCtx.textAlign='center';
+    for(const kg of kingdoms){
+      if(kg.tileCount<25)continue;
+      const cx=cam.panX+(kg.centX+.5)*w, cy=cam.panY+(kg.centY+.5)*h;
+      if(cx<-80||cy<-20||cx>cW+80||cy>cH+20)continue;
+      const tw=civCtx.measureText(kg.name).width,pad=5,bh=13;
+      civCtx.fillStyle='rgba(5,7,9,.6)';
+      const bx=cx-tw/2-pad,by=cy-bh/2;
+      civCtx.beginPath();
+      if(civCtx.roundRect)civCtx.roundRect(bx,by,tw+pad*2,bh,3);else civCtx.rect(bx,by,tw+pad*2,bh);
+      civCtx.fill();
+      civCtx.strokeStyle=`rgba(${kg.r},${kg.g},${kg.b},.5)`;civCtx.lineWidth=.8;civCtx.stroke();
+      civCtx.textBaseline='middle';civCtx.fillStyle=`rgba(${kg.r},${kg.g},${kg.b},.95)`;civCtx.fillText(kg.name,cx,cy);
+      civCtx.textBaseline='top';
+    }
+  }
+
+  /* Pass 5: selected tile highlight */
+  if(selectedTile){
+    const{tx,ty}=selectedTile;
+    const sx=toSX(tx),sy=toSY(ty);
+    const pulse=.7+.3*Math.sin(Date.now()*.003);
+    civCtx.strokeStyle=`rgba(255,255,180,${(.75*pulse).toFixed(2)})`;
+    civCtx.lineWidth=2;civCtx.setLineDash([4,3]);
+    civCtx.strokeRect(sx,sy,w,h);civCtx.setLineDash([]);
+    civCtx.fillStyle=`rgba(255,255,180,${(.9*pulse).toFixed(2)})`;
+    const mx=sx+w/2,my=sy+h/2;
+    for(const[ox,oy]of[[-1,0],[1,0],[0,-1],[0,1]]){civCtx.beginPath();civCtx.arc(mx+ox*6,my+oy*6,2,0,Math.PI*2);civCtx.fill();}
+  }
+
+  /* Pass 6: tile note pins */
+  if(notesDB&&Object.keys(notesDB.tiles).length){
+    for(const[key,pin]of Object.entries(notesDB.tiles)){
+      if(!pin.note&&!pin.title)continue;
+      const[ptx,pty]=key.split(',').map(Number);
+      const px3=cam.panX+(ptx+.5)*w, py3=cam.panY+(pty+.5)*h;
+      if(px3<-14||py3<-20||px3>cW+14||py3>cH+14)continue;
+      const r2=Math.max(3.5,5*Math.min(1,cam.zoom));
+      // Pin drop body
+      civCtx.beginPath();
+      civCtx.arc(px3,py3-r2,r2,0,Math.PI*2);
+      civCtx.fillStyle='rgba(184,160,224,.92)';civCtx.fill();
+      civCtx.strokeStyle='rgba(255,255,255,.5)';civCtx.lineWidth=.9;civCtx.stroke();
+      // Pin needle
+      civCtx.beginPath();civCtx.moveTo(px3,py3-r2*.3);civCtx.lineTo(px3,py3+r2*.8);
+      civCtx.strokeStyle='rgba(184,160,224,.7)';civCtx.lineWidth=1.2;civCtx.stroke();
+      // Label (only at zoom ≥ 1.5)
+      if(cam.zoom>=1.5&&(pin.title||'').trim()){
+        civCtx.font=`bold 8px "Share Tech Mono",monospace`;civCtx.textAlign='center';civCtx.textBaseline='bottom';
+        const lbl=pin.title.length>22?pin.title.slice(0,20)+'…':pin.title;
+        const tw=civCtx.measureText(lbl).width+8;
+        civCtx.fillStyle='rgba(20,15,30,.8)';
+        if(civCtx.roundRect)civCtx.roundRect(px3-tw/2,py3-r2*2-14,tw,11,2);else civCtx.rect(px3-tw/2,py3-r2*2-14,tw,11);
+        civCtx.fill();
+        civCtx.fillStyle='rgba(220,200,255,.95)';civCtx.fillText(lbl,px3,py3-r2*2-4);
+      }
+    }
+  }
+}
+
+/* ── §17  ELEVATION HISTOGRAM ── */
+function drawElevBar(){
+  const w=elevBarCvs.width,h=elevBarCvs.height,tot=GRID_W*GRID_H;
+  const bins=new Int32Array(w);for(let i=0;i<tot;i++)bins[Math.min(w-1,(elevGrid[i]*w)|0)]++;
+  const mb=Math.max(...bins);elevBarCtx.clearRect(0,0,w,h);
+  for(let b=0;b<w;b++){const col=sampleRamp(b/w),bh=(bins[b]/mb)*h;elevBarCtx.fillStyle=`rgb(${col[0]|0},${col[1]|0},${col[2]|0})`;elevBarCtx.fillRect(b,h-bh,1,bh);}
+  const sx=.30*w;elevBarCtx.strokeStyle='rgba(74,179,232,.75)';elevBarCtx.lineWidth=1;elevBarCtx.setLineDash([3,2]);elevBarCtx.beginPath();elevBarCtx.moveTo(sx,0);elevBarCtx.lineTo(sx,h);elevBarCtx.stroke();elevBarCtx.setLineDash([]);
+}
+
+/* ── §18  LEGEND + KINGDOMS + STATS ── */
+function buildLegend(){
+  legendEl.innerHTML='';const tot=GRID_W*GRID_H;
+  BIOMES.forEach((bio,i)=>{const pct=(biomeCounts[i]/tot*100).toFixed(1);if(parseFloat(pct)<.1)return;const d=document.createElement('div');d.className='li';d.innerHTML=`<div class="ls" style="background:${bio.color}"></div><span>${bio.label}</span><span class="le">${bio.elev}</span><span class="lp">${pct}%</span>`;legendEl.appendChild(d);});
+  const lr=document.getElementById('legend-river'),lrc=document.getElementById('legend-rc');
+  if(rivers.length>0){lr.style.display='flex';lrc.textContent=rivers.length;}else lr.style.display='none';
+}
+function buildKingdomsList(){
+  const el=document.getElementById('kingdoms-list');el.innerHTML='';
+  for(const[ki,kg]of kingdoms.entries()){const kc=cities.filter(c=>c.kingdomIdx===ki),cap=kc.find(c=>c.isCapital);const d=document.createElement('div');d.className='ki';d.innerHTML=`<div class="kdot" style="background:rgb(${kg.r},${kg.g},${kg.b});box-shadow:0 0 5px rgba(${kg.r},${kg.g},${kg.b},.6)"></div><div class="kinfo"><div class="kname">${kg.fullName}</div><div class="kdet">Capital: ${cap?.name||'—'} · ${kc.length} cities</div></div>`;el.appendChild(d);}
+}
+function updateStats(){
+  const tot=GRID_W*GRID_H;let w2=0,land=0,esum=0;
+  for(let i=0;i<tot;i++){esum+=elevGrid[i];if(elevGrid[i]<.30)w2++;else land++;}
+  const ab=Array.from(biomeCounts).filter(c=>c/tot>.002).length;
+  stEls.sz.textContent=`${GRID_W}×${GRID_H}`;stEls.ti.textContent=tot.toLocaleString();
+  stEls.la.textContent=`${(land/tot*100).toFixed(1)}%`;stEls.wa.textContent=`${(w2/tot*100).toFixed(1)}%`;
+  stEls.el.textContent=(esum/tot).toFixed(3);stEls.bi.textContent=ab;
+  stEls.rv.textContent=rivers.length;stEls.rt.textContent=riverTileSet?riverTileSet.size.toLocaleString():'—';
+  stEls.ci.textContent=cities.length;stEls.ki.textContent=kingdoms.length;
+  const stRn=document.getElementById('st-rn');if(stRn)stRn.textContent=roads.length;
+}
+
+/* ── §19  TILE INSPECTOR ── */
+function updateInspector(tx, ty){
+  if(tx<0||ty<0||tx>=GRID_W||ty>=GRID_H||!elevGrid){ inspector.innerHTML='<div class="ins-hint">Click any tile on the map to inspect it</div>'; return; }
+  selectedTile={tx,ty};
+  const i=ty*GRID_W+tx;
+  const e=elevGrid[i], m=moistGrid[i], t=tempGrid[i], bio=BIOMES[biomeGrid[i]];
+  const rain=rainfallGrid?rainfallGrid[i]:m;
+  const wdx=windXGrid?windXGrid[i]:0, wdy=windYGrid?windYGrid[i]:0;
+  const windAngle=Math.atan2(wdy,wdx)*(180/Math.PI);
+  const COMPASS=['E','NE','N','NW','W','SW','S','SE'];
+  const windDir=COMPASS[Math.round((windAngle+360)%360/45)%8]||'—';
+  const windSpeed=Math.sqrt(wdx*wdx+wdy*wdy);
+  const windLabel=windSpeed<0.05?'Calm (ITCZ)':windSpeed<0.5?`Light ${windDir}`:`${windDir} wind`;
+  const isRiver=riverTileSet&&riverTileSet.has(i);
+  const isRoad=roadTileSet&&roadTileSet.has(i);
+  const isMajorRoad=isRoad&&roads.some(r=>r.isMajor&&r.path.some(p=>p.x===tx&&p.y===ty));
+  const ki=territoryGrid?territoryGrid[i]:-1;
+  const kg=ki>=0?kingdoms[ki]:null;
+  const city=cityByTile&&cityByTile.has(i)?cityByTile.get(i):null;
+  let nearCity=city, nearDist=0;
+  if(!nearCity&&cities.length){let minD=Infinity;for(const c of cities){const d=Math.sqrt((c.x-tx)**2+(c.y-ty)**2);if(d<minD){minD=d;nearCity=c;nearDist=minD;}}nearDist=nearCity?Math.sqrt((nearCity.x-tx)**2+(nearCity.y-ty)**2):0;}
+
+  const bar=(v,color,max=1)=>`<div class="ins-bar"><div class="ins-bar-track"><div class="ins-bar-fill" style="width:${Math.min(100,(v/max*100)).toFixed(0)}%;background:${color}"></div></div></div>`;
+  const row=(k,v,cls='',extra='')=>`<div class="ins-row"><span class="ins-key">${k}</span><span class="ins-val ${cls}">${v}</span>${extra}</div>`;
+
+  const eBar=bar(e,'linear-gradient(90deg,#1c4a78,#4ab3e8,#6aa040,#9a9090,#e8e8e8)');
+  const rBar=bar(rain,'linear-gradient(90deg,#c87020,#90b028,#1880d0)');
+  const tBar=bar(t,'linear-gradient(90deg,#2060c8,#c84428)');
+
+  const groupColor={'water':'accent','mountain':'','cold':'#80c8f0','polar':'#a8d8f8','arid':'#d8a040','forest':'#50c060','wetland':'#60d080','highland':''}[bio.group]||'';
+
+  let html=`
+    <div class="ins-coords">X:${String(tx).padStart(3,'0')} Y:${String(ty).padStart(3,'0')}</div>
+    <div class="ins-section">Terrain</div>
+    <div class="ins-row"><span class="ins-key">Biome</span><span class="ins-val" style="display:flex;align-items:center;gap:4px"><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${bio.color};flex-shrink:0"></span>${bio.label}</span></div>
+    <div class="ins-row"><span class="ins-key">Group</span><span class="ins-val ${groupColor}">${bio.group}</span></div>
+    ${row('Elevation', e.toFixed(3),'accent',eBar)}
+    ${row('Temperature', t.toFixed(3),'',tBar)}
+    <div class="ins-section">Climate</div>
+    ${row('Rainfall', rain.toFixed(3),'',rBar)}
+    ${row('Base Moisture', m.toFixed(3),'',bar(m,'linear-gradient(90deg,#c8a060,#4a80c8)'))}
+    ${row('Wind', windLabel, 'accent')}
+    <div class="ins-section">Hydrology</div>
+    ${row('River', isRiver?'✓ River tile':'—', isRiver?'green':'red')}
+    ${row('Road', isRoad?(isMajorRoad?'⊘ Major Road':'⊘ Minor Road'):'—', isRoad?'gold':'')}`;
+
+  if(civVisible&&kg){
+    const cap=cities[kg.capCityIdx];
+    html+=`<div class="ins-section">Civilization</div>
+    <div class="ins-row"><span class="ins-key">Kingdom</span><span class="ins-val" style="color:rgb(${kg.r},${kg.g},${kg.b})">${kg.name}</span></div>
+    ${row('Full Name', kg.fullName)}`;
+    if(city){
+      html+=row('This Tile', `${city.isCapital?'★ ':''}${city.name}`, 'gold');
+      html+=row('Status', city.isCapital?'Capital':'City', city.isCapital?'gold':'accent');
+    } else if(nearCity){
+      const nc=nearCity; const nc_kg=kingdoms[nc.kingdomIdx];
+      html+=`<div class="ins-row"><span class="ins-key">Nearest City</span><span class="ins-val gold">${nc.isCapital?'★ ':''}${nc.name}</span></div>`;
+      html+=row('Distance', nearDist.toFixed(1)+' tiles', 'accent');
+      html+=row('Belongs To', nc_kg?nc_kg.name:'—');
+    }
+  } else if(civVisible){
+    html+=`<div class="ins-section">Civilization</div>${row('Territory','Unclaimed','red')}`;
+  }
+  inspector.innerHTML=html;
+  // ── Notes section ──────────────────────────────────────────────
+  const tileNote=getTileNote(tx,ty);
+  const noteSection=document.createElement('div');
+  noteSection.innerHTML=`
+    <div class="ins-section">Tile Notes</div>
+    <textarea class="ins-note-area" id="ins-tile-note" placeholder="Add notes for this tile…" rows="3">${escH(tileNote.note)}</textarea>
+    <button class="ins-codex-btn" id="ins-open-codex">📓 Open in World Codex</button>`;
+  inspector.appendChild(noteSection);
+  const tna=document.getElementById('ins-tile-note');
+  let noteDebounce=null;
+  tna.addEventListener('input',()=>{
+    clearTimeout(noteDebounce);
+    noteDebounce=setTimeout(()=>{ setTileNote(tx,ty,tna.value,''); renderCivilizations(); renderMinimap(); },400);
+  });
+  document.getElementById('ins-open-codex').addEventListener('click',()=>openCodex('pins'));
+  renderCivilizations();
+}
+
+/* ── §20  RENDER ALL ── */
+function renderAll(){
+  renderTerrain();
+  renderRivers();
+  renderCivilizations();
+  renderMinimap();
+}
+
+/* ── §21  LORE SYSTEM ── */
+let worldLore = null;
+
+/* — World-name syllables — */
+const LWA=['Aer','Vor','Eld','Orm','Val','Kyr','Zeth','Nael','Dor','Sol','Myr','Thal','Bael','Ern','Ath','Vaer','Wyn','Ilm','Dael','Orath'];
+const LWB=['or','an','un','is','en','im','al','eth','ael','um','in','os'];
+const LWC=['ia','or','ath','ar','is','mar','dor','wyn','fel','eria','oria','anthos','elos','idor','amar','edris'];
+const LADJ=['Ancient','Forsaken','Sundered','Eternal','Shattered','Verdant','Crimson','Twilight','Shrouded','Boundless','Scarred','Hallowed','Drowned','Ashen','Gilded','Divided','Forsaken','Unmarked','Blood-Red','Endless'];
+const LNOU=['Realm','World','Land','Expanse','Dominion','Reaches','Weald','Marches','Kingdoms','Wastes','Tides','Crownlands','Wilds','Depths','Borderlands','Shires','Vales','Highlands'];
+
+/* — Person-name syllables — */
+const LPA=['Aed','Val','Mor','Kar','Bran','Wyn','Elm','Eld','Fen','Orm','Grim','Ith','Kern','Loch','Mith','Roth','Thor','Ulm','Dun','Hal','Gor','Fir','Aryn','Bael','Vaer','Sel','Orm','Cael','Wyn','Dael'];
+const LPB=['ric','ard','win','wyn','mir','eth','ron','vor','dan','red','helm','gar','bert','rand','ald','mar','olf','oth','ric','den','mor','wyn','eld','val'];
+const LTTL=['the Bold','the Wise','the Conqueror','the Just','the Fierce','the Unbroken','the Wanderer','the Builder','the Betrayed','the Last','the First','the Grey','the Radiant','the Cursed','the Unyielding','the Forgotten','the Undying','the Patient'];
+
+/* — Event word-banks — */
+const LTREATY_ADJ=['Golden','Iron','Silver','Eternal','Crimson','Broken','Sacred','Blood','Oath-bound','Ancient','Forgotten','Hollow','Ivory'];
+const LTREATY_NOU=['Accord','Compact','Pact','Treaty','Covenant','Alliance','Charter','Declaration'];
+const LWAR_PRE=['The','The Great','The Second','The Long','The Dark','The First','The Forgotten','The Bitter'];
+const LWAR_NOU=['War','Conflict','Strife','Campaign','Crusade','Siege','Reckoning','Sundering'];
+const LCALAM=['Great Plague','Sundering Storm','Year of Blood','Long Winter','Sunless Year','Red Tide','Blighted Season','Ash Fall','Rain of Fire','Black Drought','Year of Silence','Great Trembling'];
+const LDISCOV=['vast iron deposits','a network of ancient ruins','rich salt flats','a hidden mountain pass','deep gold seams','a sacred spring','strange artifacts from before memory','fertile land hidden beyond the wastes','an ancient library carved into stone'];
+const LPROPHECY=['the Moonless Night','the Return of Fire','the Last King','the Sundered Throne','the Drowned Prophecy','the Third Age','the Empty Throne','the Second Sundering','the Coming Dark','the Wandering Star'];
+const LTERRAIN=['fertile lowlands','ancient forests','coastal shores','river-fed valleys','windswept plains','rocky highlands','sunlit meadows','misty fens','shadow-draped woodlands','tide-carved shores'];
+const LGOLDEN=['art and architecture','trade and commerce','military might','scholarly learning','exploration','spiritual devotion','agricultural abundance'];
+const LOUTCOME=['a negotiated peace','the decisive victory of neither side','the exhaustion of both armies','the intervention of a third power','a dynastic marriage','the assassination of a key commander','famine and retreat'];
+const LCAUSE=['a dynastic crisis','an unprecedented flood','a failed harvest','a plague of locusts','treachery from within','a disputed succession','an ill-fated expedition'];
+
+function lPick(arr,rng){return arr[(rng()*arr.length)|0];}
+function lPersonName(rng){return lPick(LPA,rng)+lPick(LPB,rng);}
+function lPersonTitled(rng){return lPersonName(rng)+' '+lPick(LTTL,rng);}
+function lTreatyName(rng){return `The ${lPick(LTREATY_ADJ,rng)} ${lPick(LTREATY_NOU,rng)}`;}
+function lWarName(rng,k1){return rng()<.5?`${lPick(LWAR_PRE,rng)} ${lPick(LWAR_NOU,rng)} of ${k1}`:`The ${k1} ${lPick(LWAR_NOU,rng)}`;}
+function lWorldName(rng){
+  const base=lPick(LWA,rng)+lPick(LWB,rng)+lPick(LWC,rng);
+  const adj=lPick(LADJ,rng),nou=lPick(LNOU,rng);
+  return{base,epithet:`The ${adj} ${nou}`};
+}
+
+/* — Resource by dominant kingdom biome — */
+const LBIOME_RES=[
+  // 0-12 (original)
+  ['Deepwater Fish','Pearl Beds'],['Ocean Fish','Sea Salt'],['Coastal Trade','Saltworks'],
+  ['Amber Glass','Salt Flats'],['Peat Fuel','Reed Cloth'],['Wheat Grain','Livestock'],
+  ['Spices','Dye Plants'],['Hardwood Timber','Wild Game'],['Rare Timber','Wild Silk'],
+  ['Iron Ore','Coal Seams'],['Silver Veins','Quarried Granite'],['Gold Deposits','Precious Gems'],
+  ['Arctic Furs','Ice Crystals'],
+  // 13-19 (new biomes)
+  ['Reindeer Hides','Tundra Peat'],          // 13 tundra
+  ['Desert Copper','Rare Spices'],           // 14 desert
+  ['Exotic Hardwood','Medicinal Plants'],    // 15 jungle
+  ['Obsidian Blades','Sulphur Deposits'],    // 16 volcanic
+  ['Pine Timber','Boreal Furs'],             // 17 taiga
+  ['Bog Iron','Reed Cloth'],                 // 18 swamp
+  ['Polar Ivory','Glacial Water'],           // 19 ice_cap
+];
+function lKingdomResource(ki,rng){
+  const bc=new Int32Array(BIOMES.length);
+  for(let i=0;i<GRID_W*GRID_H;i++)if(territoryGrid[i]===ki)bc[biomeGrid[i]]++;
+  let best=5,bestC=0;for(let b=3;b<BIOMES.length;b++)if(bc[b]>bestC){bestC=bc[b];best=b;}
+  return lPick(LBIOME_RES[best],rng);
+}
+
+/* — Population estimate — */
+//                         0  1   2    3    4    5    6    7    8    9   10   11   12   13   14  15   16   17   18   19
+const LBDENSITY=[          0, 0, .08, .12, .85, 1.4, .95, 1.15,.85, .55, .35, .07,  0, .15, .08, .6,   0,  .5, .20,  0];
+function lKingdomPop(ki){
+  let pop=0;for(let i=0;i<GRID_W*GRID_H;i++)if(territoryGrid[i]===ki)pop+=LBDENSITY[biomeGrid[i]]*85;
+  const kc=cities.filter(c=>c.kingdomIdx===ki);
+  pop+=kc.length*9500+(kc.some(c=>c.isCapital)?28000:0);
+  return Math.round(pop/500)*500;
+}
+
+/* — Relationship templates — */
+const LREL_T=[
+  (k1,k2,yr,rng)=>`Hostile rivals since ${lWarName(rng,k1)} erupted in year ${yr}. Border skirmishes persist to this day.`,
+  (k1,k2,yr,rng)=>`Uneasy allies, bound by ${lTreatyName(rng)} signed in year ${yr} following decades of bitter conflict.`,
+  (k1,k2,yr,rng)=>`Ancient enemies held apart by a fragile truce brokered in year ${yr}. Neither side trusts the other.`,
+  (k1,k2,yr,rng)=>`Flourishing trade partners. Open borders and shared tariffs have enriched both realms since year ${yr}.`,
+  (k1,k2,yr,rng)=>`Tense neighbors disputing a contested border region. Skirmishes flared most recently in year ${yr}.`,
+  (k1,k2,yr,rng)=>`Wary of each other but technically at peace. ${lTreatyName(rng)} of year ${yr} maintains a fragile calm.`,
+  (k1,k2,yr,rng)=>`Bound by a royal marriage pact negotiated in year ${yr}, though political tensions remain high.`,
+  (k1,k2,yr,rng)=>`Former enemies turned cautious allies after ${lPick(LOUTCOME,rng)} ended their conflict in year ${yr}.`,
+  (k1,k2,yr,rng)=>`Rivals competing for dominance of the regional ${lPick(['timber','salt','iron','grain','spice'],rng)} trade since year ${yr}.`,
+  (k1,k2,yr,rng)=>`United by a common ancestral heritage, though political disagreements have cooled relations since year ${yr}.`,
+];
+
+/* — Core lore generator — */
+function generateLore(seed){
+  const rng=mkRNG(seed^0xfade1234);
+  const worldName=lWorldName(rng);
+  const worldAge=900+((rng()*7100)|0);
+  const events=[];
+
+  /* 1. World origin */
+  const firstFounder=lPersonTitled(rng);
+  const terrain=lPick(LTERRAIN,rng);
+  events.push({year:1+((rng()*180)|0),type:'origin',
+    text:`The first recorded peoples arrived in ${worldName.base} under the guidance of ${firstFounder}. They named this land and established the first crude settlements along its ${terrain}.`});
+
+  /* 2. Kingdom foundings (earliest first) */
+  const kdetails=[];
+  for(let ki=0;ki<kingdoms.length;ki++){
+    const kg=kingdoms[ki];
+    const cap=cities.find(c=>c.isCapital&&c.kingdomIdx===ki);
+    const founder=lPersonTitled(rng);
+    const foundYear=80+((rng()*(worldAge-200))|0);
+    const resource=lKingdomResource(ki,rng);
+    const pop=lKingdomPop(ki);
+    kdetails.push({ki,kg,cap,founder,foundYear,resource,pop,rels:[]});
+  }
+  kdetails.sort((a,b)=>a.foundYear-b.foundYear);
+  if(kdetails.length>0){
+    const first=kdetails[0];
+    events.push({year:first.foundYear,type:'founding',
+      text:`${first.kg.fullName} was established by ${first.founder}, unifying the scattered peoples of the ${lPick(LTERRAIN,rng)} and declaring ${first.cap?.name||'the first settlement'} as the seat of power.`});
+  }
+  if(kdetails.length>1){
+    const second=kdetails[1];
+    events.push({year:second.foundYear,type:'founding',
+      text:`${second.kg.fullName} arose under ${second.founder}, carving out a domain from the wilderness and rivaling the older powers of ${worldName.base}.`});
+  }
+
+  /* 3. War */
+  if(kingdoms.length>=2){
+    const i1=(rng()*kingdoms.length)|0;let i2;do{i2=(rng()*kingdoms.length)|0;}while(i2===i1);
+    const k1=kingdoms[i1],k2=kingdoms[i2];
+    const warYear=150+((rng()*(worldAge-300))|0);
+    const dur=3+((rng()*20)|0);
+    events.push({year:warYear,type:'war',
+      text:`${lWarName(rng,k1.name)} erupted between ${k1.fullName} and ${k2.fullName}, engulfing the land in ${dur} years of bloodshed. The conflict ended in ${lPick(LOUTCOME,rng)}.`});
+  }
+
+  /* 4. Calamity */
+  const calamYear=100+((rng()*(worldAge-200))|0);
+  const calamCity=cities.length?cities[(rng()*cities.length)|0]:null;
+  events.push({year:calamYear,type:'calamity',
+    text:`The ${lPick(LCALAM,rng)} swept across ${worldName.base}${calamCity?`, levelling ${calamCity.name} and the surrounding countryside`:''}, killing countless thousands and reshaping the political order for generations.`});
+
+  /* 5. Discovery */
+  if(kingdoms.length>0){
+    const dk=kingdoms[(rng()*kingdoms.length)|0];
+    const discYear=60+((rng()*(worldAge-120))|0);
+    events.push({year:discYear,type:'discovery',
+      text:`Scouts from ${dk.fullName} discovered ${lPick(LDISCOV,rng)} within their territory, transforming the kingdom's wealth and fundamentally altering its standing among neighboring powers.`});
+  }
+
+  /* 6. Alliance */
+  if(kingdoms.length>=2){
+    const ai=(rng()*kingdoms.length)|0;let bi;do{bi=(rng()*kingdoms.length)|0;}while(bi===ai);
+    const allyYear=180+((rng()*(worldAge-350))|0);
+    events.push({year:allyYear,type:'alliance',
+      text:`${lTreatyName(rng)} was signed between ${kingdoms[ai].fullName} and ${kingdoms[bi].fullName} in year ${allyYear}, establishing a generation of shared prosperity and open borders.`});
+  }
+
+  /* 7. Golden age */
+  if(kingdoms.length>0){
+    const gk=kingdoms[(rng()*kingdoms.length)|0];
+    const gYear=200+((rng()*(worldAge-400))|0);
+    const gRuler=lPersonTitled(rng);
+    events.push({year:gYear,type:'alliance',
+      text:`A golden age of ${lPick(LGOLDEN,rng)} flourished in ${gk.fullName} under ${gRuler}. This era left enduring monuments still standing across the land today.`});
+  }
+
+  /* 8. Decline / catastrophe */
+  if(kingdoms.length>0){
+    const dk2=kingdoms[(rng()*kingdoms.length)|0];
+    const dYear=300+((rng()*(worldAge-400))|0);
+    events.push({year:dYear,type:'calamity',
+      text:`${dk2.fullName} suffered a catastrophic collapse following ${lPick(LCAUSE,rng)}, losing vast swathes of territory and much of its former glory — though it endures to this day.`});
+  }
+
+  /* 9. Prophecy */
+  const propCity=cities.length?cities[(rng()*cities.length)|0]:null;
+  const propYear=50+((rng()*(worldAge-100))|0);
+  events.push({year:propYear,type:'prophecy',
+    text:`The oracle of ${propCity?.name||'the ancient stone circle'} delivered the prophecy of ${lPick(LPROPHECY,rng)}, which scholars, priests, and kings have debated ever since.`});
+
+  events.sort((a,b)=>a.year-b.year);
+
+  /* Kingdom relationships */
+  for(const kd of kdetails){
+    for(let ki2=0;ki2<kingdoms.length;ki2++){
+      if(ki2===kd.ki)continue;
+      const kg2=kingdoms[ki2];
+      const yr=kd.foundYear+50+((rng()*Math.min(600,worldAge-kd.foundYear-80))|0);
+      const fn=lPick(LREL_T,rng);
+      kd.rels.push({name:kg2.name,text:fn(kd.kg.name,kg2.name,yr,rng),r:kg2.r,g:kg2.g,b:kg2.b});
+    }
+  }
+
+  worldLore={worldName,worldAge,numKingdoms:kingdoms.length,events,kdetails};
+}
+
+/* — Lore panel renderer — */
+function buildLorePanel(){
+  const el=document.getElementById('world-lore');
+  if(!worldLore){el.innerHTML='<div class="lore-hint">Generate a world to read its history</div>';return;}
+  const{worldName,worldAge,numKingdoms,events,kdetails}=worldLore;
+
+  const EV_COL={origin:'#4ab3e8',founding:'#c9a84c',war:'#e87060',calamity:'#e06060',discovery:'#50d0a0',alliance:'#70b0e0',prophecy:'#b880e0'};
+  const EV_LBL={origin:'Origin',founding:'Founding',war:'War',calamity:'Calamity',discovery:'Discovery',alliance:'Age of Peace',prophecy:'Prophecy'};
+
+  let h=`
+    <div class="lore-world-name">${worldName.base}</div>
+    <div class="lore-epithet">${worldName.epithet}</div>
+    <div class="lore-meta">
+      <div class="lore-meta-item"><span class="lore-meta-k">Age</span><span class="lore-meta-v">${worldAge.toLocaleString()}</span></div>
+      <div class="lore-meta-item"><span class="lore-meta-k">Kingdoms</span><span class="lore-meta-v">${numKingdoms}</span></div>
+      <div class="lore-meta-item"><span class="lore-meta-k">Cities</span><span class="lore-meta-v">${cities.length}</span></div>
+    </div>
+    <div class="lore-sec">Chronicles of ${worldName.base}</div>
+    <div class="lore-events">`;
+
+  for(const ev of events){
+    const col=EV_COL[ev.type]||'#cdd6e0',lbl=EV_LBL[ev.type]||ev.type;
+    h+=`<div class="lore-event ev-${ev.type}">
+      <div class="lore-ev-yr" style="color:${col}">
+        Year ${ev.year}
+        <span class="lore-ev-tag" style="color:${col};border:1px solid ${col}30;background:${col}10">${lbl}</span>
+      </div>
+      <div class="lore-ev-body">${ev.text}</div>
+    </div>`;
+  }
+  h+=`</div>`;
+
+  /* Per-kingdom entries */
+  h+=`<div class="lore-sec">The Kingdoms</div>`;
+  for(const kd of kdetails){
+    const{kg,cap,founder,foundYear,resource,pop,rels}=kd;
+    const col=`rgb(${kg.r},${kg.g},${kg.b})`;
+    const popStr=pop>=1000000?`${(pop/1000000).toFixed(2)}M`:pop>=1000?`${(pop/1000).toFixed(0)}K`:pop.toString();
+    h+=`<div class="lore-kdiv" style="border-left-color:${col}">
+      <div class="lore-kname" style="color:${col}">${kg.fullName}</div>
+      <div class="lore-krows">
+        <div class="lore-krow"><span class="lore-kkey">Founded</span><span class="lore-kval">Year ${foundYear}</span></div>
+        <div class="lore-krow"><span class="lore-kkey">Founder</span><span class="lore-kval">${founder}</span></div>
+        <div class="lore-krow"><span class="lore-kkey">Capital</span><span class="lore-kval">${cap?.name||'—'}</span></div>
+        <div class="lore-krow"><span class="lore-kkey">Population</span><span class="lore-kval">~${popStr}</span></div>
+        <div class="lore-krow"><span class="lore-kkey">Primary Resource</span><span class="lore-kval">${resource}</span></div>
+        <div class="lore-krow"><span class="lore-kkey">Cities</span><span class="lore-kval">${cities.filter(c=>c.kingdomIdx===kd.ki).length}</span></div>
+      </div>`;
+    if(rels.length>0){
+      h+=`<div class="lore-relhdr">Foreign Relations</div>`;
+      for(const rel of rels){
+        h+=`<div class="lore-rel"><span class="lore-relname" style="color:rgb(${rel.r},${rel.g},${rel.b})">${rel.name} — </span>${rel.text}</div>`;
+      }
+    }
+    h+=`</div>`;
+  }
+  el.innerHTML=h;
+}
+
+/* ── §22  GENERATION PIPELINE ── */
+const randomSeed=()=>(Math.random()*900000+100000)|0;
+function hashStr(s){let h=5381;for(let i=0;i<s.length;i++){h=((h<<5)+h)+s.charCodeAt(i);h=h&h;}return Math.abs(h);}
+
+function setP(w,t){gBar.style.width=w;gStage.textContent=t;}
+
+function generate(seed=null){
+  // Read map size before starting
+  const mszSel=document.getElementById('s-msz');
+  if(mszSel){ const v=parseInt(mszSel.value)||120; GRID_W=v; GRID_H=v; }
+
+  overlay.classList.add('visible');setP('0%','Initialising…');
+  btnGen.disabled=true;selectedTile=null;inspector.innerHTML='<div class="ins-hint">Click any tile on the map to inspect it</div>';
+  if(minimapCvs)minimapCvs.classList.remove('ready');
+  requestAnimationFrame(()=>setTimeout(()=>{
+    currentSeed=seed!==null?seed:randomSeed();
+    seedDisp.textContent=currentSeed;seedIn.value='';
+    setP('10%','Warping Domain…');
+    setTimeout(()=>{setP('24%','Sampling Elevation…');
+    setTimeout(()=>{
+      generateWorld(currentSeed);setP('44%','Simulating Climate…');
+      setTimeout(()=>{
+        generateRivers(currentSeed);setP('58%','Placing Civilizations…');
+        setTimeout(()=>{
+          generateCivilizations(currentSeed);setP('72%','Forging Roads…');
+          setTimeout(()=>{
+            generateRoads();setP('83%','Building Cache & Rendering…');
+            setTimeout(()=>{
+              buildTerrainCache();resizeCvs();renderAll();
+              if(minimapCvs)minimapCvs.classList.add('ready');
+              setP('93%','Weaving World Lore…');
+              generateLore(currentSeed);
+              // Load per-seed notes and apply custom names
+              loadNotesDB(currentSeed);
+              applyCustomNames();
+              buildLegend();buildKingdomsList();buildLorePanel();updateStats();drawElevBar();
+              setP('100%','Done');
+              setTimeout(()=>{
+                overlay.classList.remove('visible');
+                stTxt.textContent=`Seed ${currentSeed}  ·  ${cities.length} cities  ·  ${kingdoms.length} kingdoms  ·  ${rivers.length} rivers  ·  ${roads.length} roads`;
+                btnGen.disabled=false;
+                wrap.classList.remove('no-data');
+                svUpdateBtn();
+                svAutoFillName();
+                resetCamera();
+              },80);
+            },20);
+          },20);
+        },20);
+      },20);
+    },20);},20);
+  },20));
+}
+
+/* ── §22  SAVE / LOAD SYSTEM ── */
+const SV_KEY   = 'pwg_v5_saves';
+const SV_MAX   = 12;
+const svNameIn = document.getElementById('sv-name-in');
+const btnSvSave= document.getElementById('btn-sv-save');
+const svList   = document.getElementById('sv-list');
+const svCount  = document.getElementById('sv-count');
+const svToast  = document.getElementById('sv-toast');
+
+/* Slider id list for serialisation */
+const SL_KEYS = ['s-oct','s-sc','s-wp','s-pe','s-sea','s-fo','s-rd','s-rv','s-rs','s-rl','s-ci','s-ki'];
+
+let svToastTimer = null;
+function showToast(msg, ok=true){
+  svToast.textContent = msg;
+  svToast.className   = `sv-toast ${ok?'ok':'err'} show`;
+  clearTimeout(svToastTimer);
+  svToastTimer = setTimeout(()=>{ svToast.classList.remove('show'); }, 2400);
+}
+
+/* Load the saves array from localStorage */
+function svLoad(){ try{ return JSON.parse(localStorage.getItem(SV_KEY)||'[]'); }catch{ return []; } }
+
+/* Persist the saves array */
+function svStore(saves){ localStorage.setItem(SV_KEY, JSON.stringify(saves)); }
+
+/* Snapshot the current slider values */
+function snapSliders(){
+  const snap={};
+  for(const k of SL_KEYS) snap[k]=document.getElementById(k).value;
+  return snap;
+}
+
+/* Restore slider values and fire input events so display labels update */
+function restoreSliders(snap){
+  for(const k of SL_KEYS){
+    const el=document.getElementById(k);
+    if(snap[k]!=null){ el.value=snap[k]; el.dispatchEvent(new Event('input')); }
+  }
+}
+
+/* Format a Date for display */
+function fmtDate(ts){
+  const d=new Date(ts);
+  return d.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'})
+    +' '+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
+}
+
+/* Save current world */
+function saveWorld(){
+  if(!elevGrid){ showToast('Generate a world first', false); return; }
+  const saves=svLoad();
+  if(saves.length>=SV_MAX){ showToast(`Max ${SV_MAX} saves reached — delete one first`, false); return; }
+
+  const userLabel  = svNameIn.value.trim() || (worldLore?.worldName?.base || `World ${currentSeed}`);
+  const sliderSnap = snapSliders();
+
+  const record={
+    id       : Date.now(),
+    label    : userLabel,
+    seed     : currentSeed,
+    sliders  : sliderSnap,
+    worldBase: worldLore?.worldName?.base  || '',
+    epithet  : worldLore?.worldName?.epithet || '',
+    worldAge : worldLore?.worldAge || 0,
+    kingdoms : kingdoms.length,
+    cities   : cities.length,
+    rivers   : rivers.length,
+    savedAt  : Date.now(),
+  };
+
+  saves.unshift(record);
+  svStore(saves);
+  svNameIn.value = '';
+  renderSavesList();
+  showToast(`"${record.label}" saved`);
+}
+
+/* Load a saved world */
+function loadWorld(id){
+  const saves=svLoad();
+  const rec=saves.find(s=>s.id===id);
+  if(!rec){ showToast('Save not found', false); return; }
+  restoreSliders(rec.sliders);
+  generate(rec.seed);
+  showToast(`Loading "${rec.label}"…`);
+  // Highlight this card briefly
+  document.querySelectorAll('.sv-item').forEach(el=>{
+    el.classList.toggle('active-load', el.dataset.id==id);
+  });
+  setTimeout(()=>document.querySelectorAll('.sv-item').forEach(el=>el.classList.remove('active-load')),1800);
+}
+
+/* Delete a save */
+function deleteWorld(id){
+  let saves=svLoad();
+  const rec=saves.find(s=>s.id===id);
+  saves=saves.filter(s=>s.id!==id);
+  svStore(saves);
+  renderSavesList();
+  if(rec) showToast(`"${rec.label}" deleted`);
+}
+
+/* Rename a save inline */
+function renameWorld(id, newLabel){
+  const saves=svLoad();
+  const rec=saves.find(s=>s.id===id);
+  if(rec && newLabel.trim()){ rec.label=newLabel.trim(); svStore(saves); }
+}
+
+/* Render the saved-world list */
+function renderSavesList(){
+  const saves=svLoad();
+  svCount.textContent=`${saves.length} / ${SV_MAX}`;
+
+  if(!saves.length){
+    svList.innerHTML='<div class="sv-empty">No saved worlds yet</div>';
+    return;
+  }
+
+  svList.innerHTML='';
+  for(const rec of saves){
+    const item=document.createElement('div');
+    item.className='sv-item';
+    item.dataset.id=rec.id;
+
+    const kText=`${rec.kingdoms} kingdom${rec.kingdoms!==1?'s':''}`;
+    const cText=`${rec.cities} cit${rec.cities!==1?'ies':'y'}`;
+    const rText=`${rec.rivers} river${rec.rivers!==1?'s':''}`;
+    const ageText=rec.worldAge?`Age ${rec.worldAge.toLocaleString()}`:'';
+
+    item.innerHTML=`
+      <div class="sv-item-name" title="${rec.label}">${rec.label}</div>
+      <div class="sv-item-meta">Seed ${rec.seed}  ·  ${kText}  ·  ${cText}  ·  ${rText}</div>
+      ${rec.worldBase?`<div class="sv-item-lore">${rec.worldBase}${ageText?' — '+ageText:''}</div>`:''}
+      <div class="sv-item-date">${fmtDate(rec.savedAt)}</div>
+      <div class="sv-item-btns">
+        <button class="sv-btn load" data-id="${rec.id}">Load</button>
+        <button class="sv-btn del"  data-id="${rec.id}">✕</button>
+      </div>`;
+
+    /* Inline rename on double-click of name */
+    const nameEl=item.querySelector('.sv-item-name');
+    nameEl.addEventListener('dblclick',()=>{
+      const inp=document.createElement('input');
+      inp.value=rec.label; inp.maxLength=36;
+      inp.style.cssText='width:100%;background:rgba(255,255,255,.06);border:1px solid #4caf76;color:var(--text);font-family:var(--fm);font-size:.72rem;padding:2px 5px;outline:none;margin-bottom:2px';
+      nameEl.replaceWith(inp); inp.focus(); inp.select();
+      const commit=()=>{ renameWorld(rec.id,inp.value); renderSavesList(); };
+      inp.addEventListener('blur',commit);
+      inp.addEventListener('keydown',e=>{ if(e.key==='Enter')commit(); if(e.key==='Escape'){ renderSavesList(); } });
+    });
+
+    svList.appendChild(item);
+  }
+}
+
+/* Persistent click delegation on the list container */
+svList.addEventListener('click', e=>{
+  const btn=e.target.closest('.sv-btn');
+  if(!btn)return;
+  const id=Number(btn.dataset.id);
+  if(btn.classList.contains('load')) loadWorld(id);
+  else if(btn.classList.contains('del'))  deleteWorld(id);
+});
+
+/* Enable save button only when a world exists */
+function svUpdateBtn(){ btnSvSave.disabled = !elevGrid; }
+
+/* Wire save button */
+btnSvSave.addEventListener('click', saveWorld);
+svNameIn.addEventListener('keydown', e=>{ if(e.key==='Enter') saveWorld(); });
+
+/* Auto-fill name input with lore world name after generation */
+function svAutoFillName(){
+  if(worldLore?.worldName?.base && !svNameIn.value.trim())
+    svNameIn.value = worldLore.worldName.base;
+}
+
+/* Init list on load */
+renderSavesList();
+
+/* ── §23  SLIDER BINDINGS ── */
+function bind(k,fmt){const s=sl[k],v=vl[k];const upd=()=>{v.textContent=fmt(s.value);};s.addEventListener('input',upd);upd();}
+bind('oct',v=>v); bind('sc',v=>(+v/8).toFixed(1)); bind('wp',v=>(+v/100).toFixed(2));
+bind('pe',v=>(+v/100).toFixed(2)); bind('sea',v=>(+v/100).toFixed(2)); bind('fo',v=>(+v/100).toFixed(2));
+bind('rd',v=>(+v/100).toFixed(2)); bind('rv',v=>v); bind('rs',v=>(+v/100).toFixed(2));
+bind('rl',v=>v); bind('ci',v=>v); bind('ki',v=>v);
+
+/* ── §23  ZOOM & PAN ── */
+let drag={on:false,sx:0,sy:0,px:0,py:0,moved:false};
+
+wrap.addEventListener('wheel', e=>{
+  e.preventDefault();
+  if(!elevGrid)return;
+  const factor=e.deltaY<0?1.18:1/1.18;
+  const rect=wrap.getBoundingClientRect();
+  const mx=e.clientX-rect.left, my=e.clientY-rect.top;
+  // Accumulate onto target (so rapid scroll feels continuous)
+  const curZ  = animZoom.active ? animZoom.tz  : cam.zoom;
+  const curPX = animZoom.active ? animZoom.tpx : cam.panX;
+  const curPY = animZoom.active ? animZoom.tpy : cam.panY;
+  const newZ  = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, curZ*factor));
+  const af    = newZ/curZ;
+  startZoomAnim(newZ, mx-(mx-curPX)*af, my-(my-curPY)*af);
+},{passive:false});
+
+wrap.addEventListener('mousedown',e=>{
+  if(e.button!==0)return;
+  // Snap to zoom target so drag panning is instantaneous
+  if(animZoom.active){
+    cam.zoom=animZoom.tz;cam.panX=animZoom.tpx;cam.panY=animZoom.tpy;
+    animZoom.active=false;
+    zoomBadge.textContent=cam.zoom.toFixed(2)+'×';
+  }
+  drag={on:true,sx:e.clientX,sy:e.clientY,px:cam.panX,py:cam.panY,moved:false};
+  wrap.classList.add('dragging');
+});
+wrap.addEventListener('mousemove',e=>{
+  if(!elevGrid)return;
+  // Update hover coords
+  const rect=wrap.getBoundingClientRect();
+  const sx=e.clientX-rect.left,sy=e.clientY-rect.top;
+  const{tx,ty}=screenToTile(sx,sy);
+  if(tx>=0&&ty>=0&&tx<GRID_W&&ty<GRID_H){
+    const i=ty*GRID_W+tx;
+    const bname=BIOMES[biomeGrid[i]]?.label??'?';
+    const isRv=riverTileSet&&riverTileSet.has(i)?'  ~river':'';
+    const rain=rainfallGrid?rainfallGrid[i]:moistGrid[i];
+    let civInfo='';
+    if(cityByTile&&cityByTile.has(i)){const c=cityByTile.get(i);const kg=kingdoms[c.kingdomIdx];civInfo=`  ·  ${c.isCapital?'★ ':''}${c.name}${kg?` (${kg.name})`:''}`;}
+    else if(territoryGrid&&territoryGrid[i]>=0){const kg=kingdoms[territoryGrid[i]];if(kg)civInfo=`  ·  ${kg.name}`;}
+    coordsEl.textContent=`X:${String(tx).padStart(3,'0')} Y:${String(ty).padStart(3,'0')}  ·  ${bname}  ·  e:${elevGrid[i].toFixed(3)} r:${rain.toFixed(2)} t:${tempGrid[i].toFixed(2)}${isRv}${civInfo}`;
+  } else {
+    coordsEl.textContent='X:-- Y:--';
+  }
+  if(!drag.on)return;
+  const dx=e.clientX-drag.sx,dy=e.clientY-drag.sy;
+  if(Math.abs(dx)>4||Math.abs(dy)>4)drag.moved=true;
+  if(drag.moved){cam.panX=drag.px+dx;cam.panY=drag.py+dy;zoomBadge.textContent=cam.zoom.toFixed(2)+'×';renderAll();}
+});
+wrap.addEventListener('mouseup',e=>{
+  if(e.button!==0)return;
+  wrap.classList.remove('dragging');
+  if(!drag.moved&&elevGrid){
+    const rect=wrap.getBoundingClientRect();
+    const{tx,ty}=screenToTile(e.clientX-rect.left,e.clientY-rect.top);
+    updateInspector(tx,ty);
+    // Scroll sidebar to inspector
+    document.getElementById('sb').scrollTo({top:0,behavior:'smooth'});
+  }
+  drag.on=false;
+});
+wrap.addEventListener('mouseleave',()=>{
+  coordsEl.textContent='X:-- Y:--';
+  if(drag.on){wrap.classList.remove('dragging');drag.on=false;}
+});
+
+/* Double-click resets view */
+wrap.addEventListener('dblclick',()=>{ if(elevGrid)resetCamera(); });
+document.getElementById('btn-reset-cam').addEventListener('click',()=>{ if(elevGrid)resetCamera(); });
+
+/* ── §24  STANDARD EVENTS ── */
+btnGen.addEventListener('click',()=>generate());
+btnSeed.addEventListener('click',()=>{const raw=seedIn.value.trim();if(!raw)return;generate(/^\d+$/.test(raw)?parseInt(raw):hashStr(raw));});
+seedIn.addEventListener('keydown',e=>{if(e.key==='Enter')btnSeed.click();});
+
+document.querySelectorAll('.tbtn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.tbtn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    viewMode=btn.dataset.view;
+    terrainCacheMode=''; // force cache rebuild on next render
+    renderTerrain();renderRivers();renderCivilizations();renderMinimap();
+  });
+});
+
+/* Grid-view toggle */
+const btnGrid=document.getElementById('btn-grid');
+if(btnGrid)btnGrid.addEventListener('click',()=>{
+  gridMode=!gridMode;
+  btnGrid.classList.toggle('on',gridMode);
+  btnGrid.textContent=gridMode?'⊞ Grid View On':'⊞ Grid View';
+  renderTerrain();
+});
+
+const btnRV=document.getElementById('btn-rv');
+btnRV.addEventListener('click',()=>{riversVisible=!riversVisible;btnRV.textContent=riversVisible?'~~ Rivers Visible':'~~ Rivers Hidden';btnRV.classList.toggle('off',!riversVisible);renderRivers();});
+
+const btnCV=document.getElementById('btn-cv');
+btnCV.addEventListener('click',()=>{civVisible=!civVisible;btnCV.textContent=civVisible?'⚔ Civilizations Visible':'⚔ Civilizations Hidden';btnCV.classList.toggle('off',!civVisible);renderCivilizations();});
+
+/* Roads toggle */
+const btnRoads=document.getElementById('btn-roads');
+if(btnRoads)btnRoads.addEventListener('click',()=>{
+  roadsVisible=!roadsVisible;
+  btnRoads.textContent=roadsVisible?'⊘ Roads Visible':'⊘ Roads Hidden';
+  btnRoads.classList.toggle('off',!roadsVisible);
+  renderCivilizations();renderMinimap();
+});
+
+/* ── §26  WORLD CODEX SYSTEM ──────────────────────────────────────
+   Codex is a full-screen slide-over panel with four tabs:
+     World      — rename world, epithet, free-form world notes
+     Kingdoms   — rename each kingdom, per-kingdom notes
+     Cities     — rename each city, per-city notes
+     Map Pins   — list all tile notes with coords + delete
+   All edits auto-save to notesDB (localStorage) and are instantly
+   reflected on the map (city labels, kingdom labels, inspector).
+──────────────────────────────────────────────────────────────── */
+const notesPage = document.getElementById('notes-page');
+let codexActiveTab = 'world';
+
+function openCodex(tab='world'){
+  if(!elevGrid){ showToast('Generate a world first', false); return; }
+  codexActiveTab = tab;
+  buildCodexAll();
+  notesPage.classList.add('open');
+  // Activate correct tab
+  notesPage.querySelectorAll('.np-tab').forEach(t=>t.classList.toggle('active', t.dataset.tab===tab));
+  notesPage.querySelectorAll('.np-section').forEach(s=>s.classList.toggle('active', s.id===`np-${tab}`));
+}
+function closeCodex(){
+  notesPage.classList.remove('open');
+  // Re-render map to show any name changes
+  applyCustomNames();
+  buildKingdomsList();
+  buildLorePanel();
+  renderCivilizations();
+  renderMinimap();
+}
+
+/* ── Debounced save helper ── */
+let _codexDebounces={};
+function cdSave(key, fn, delay=500){
+  clearTimeout(_codexDebounces[key]);
+  _codexDebounces[key]=setTimeout(()=>{ fn(); saveNotesDB(); applyCustomNames(); renderCivilizations(); renderMinimap(); }, delay);
+}
+
+/* ── Saved badge flash ── */
+function flashBadge(el){ if(!el)return; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),1800); }
+
+/* ── Tab: World ── */
+function buildCodexWorld(){
+  const sec=document.getElementById('np-world'); if(!sec)return;
+  const wn=getWorldDN(), we=getWorldEpit(), wno=notesDB.worldNote||'';
+  sec.innerHTML=`
+    <div class="np-sh">🌍 World Identity</div>
+    <div class="np-card">
+      <div class="np-row">
+        <span class="np-label">World Name</span>
+        <input class="np-input" id="cd-wname" value="${escH(wn)}" maxlength="48" placeholder="World name…"/>
+        <span class="np-badge" id="cd-wname-ok">✓ Saved</span>
+      </div>
+      <div class="np-row">
+        <span class="np-label">Epithet</span>
+        <input class="np-input" id="cd-wepit" value="${escH(we)}" maxlength="64" placeholder="The Ancient Realm…"/>
+        <span class="np-badge" id="cd-wepit-ok">✓ Saved</span>
+      </div>
+    </div>
+    <div class="np-sh" style="margin-top:20px">📜 World Notes</div>
+    <div class="np-card">
+      <textarea class="np-textarea" id="cd-wnote" placeholder="Write freely about this world — its history, mythology, themes, secrets…" style="min-height:200px">${escH(wno)}</textarea>
+      <span class="np-badge-r" id="cd-wnote-ok">✓ Saved</span>
+    </div>`;
+
+  const wni=sec.querySelector('#cd-wname'), weo=sec.querySelector('#cd-wepit'), wnt=sec.querySelector('#cd-wnote');
+  wni.addEventListener('input',()=>cdSave('wname',()=>{notesDB.worldName=wni.value.trim()||null;flashBadge(sec.querySelector('#cd-wname-ok'));}));
+  weo.addEventListener('input',()=>cdSave('wepit',()=>{notesDB.worldEpithet=weo.value.trim()||null;flashBadge(sec.querySelector('#cd-wepit-ok'));}));
+  wnt.addEventListener('input',()=>cdSave('wnote',()=>{notesDB.worldNote=wnt.value;flashBadge(sec.querySelector('#cd-wnote-ok'));}));
+}
+
+/* ── Tab: Kingdoms ── */
+function buildCodexKingdoms(){
+  const sec=document.getElementById('np-kingdoms'); if(!sec)return;
+  if(!kingdoms.length){ sec.innerHTML='<div class="np-empty-msg">No kingdoms yet.<br>Generate a world first.</div>'; return; }
+  let html=`<div class="np-sh">⚔ Kingdoms</div>`;
+  for(const[ki,kg]of kingdoms.entries()){
+    const col=`rgb(${kg.r},${kg.g},${kg.b})`;
+    const dn=getKDN(ki), kn=notesDB.kingdoms[ki]?.note||'';
+    const cap=cities[kg.capCityIdx]; const kCities=cities.filter(c=>c.kingdomIdx===ki);
+    html+=`<div class="np-card" id="cd-kg-${ki}">
+      <div class="np-card-hd"><div class="np-dot" style="background:${col}"></div><span style="color:${col}">${escH(kg.fullName)}</span></div>
+      <div class="np-row">
+        <span class="np-label">Name</span>
+        <input class="np-input cd-kname" data-ki="${ki}" value="${escH(dn)}" maxlength="48" placeholder="${escH(kg.name)}"/>
+        <span class="np-badge cd-k-ok" id="cd-k-ok-${ki}">✓ Saved</span>
+      </div>
+      <div class="np-km-sub" style="margin-bottom:8px">Capital: ${escH(cap?.name||'—')} · ${kCities.length} cities · Pop ~${Math.round(lKingdomPop(ki)/500)*500}</div>
+      <textarea class="np-textarea cd-knote" data-ki="${ki}" placeholder="Notes about ${escH(kg.fullName)}…">${escH(kn)}</textarea>
+      <span class="np-badge-r cd-kn-ok" id="cd-kn-ok-${ki}">✓ Saved</span>
+    </div>`;
+  }
+  sec.innerHTML=html;
+  sec.querySelectorAll('.cd-kname').forEach(inp=>{
+    inp.addEventListener('input',()=>{
+      const ki=+inp.dataset.ki;
+      cdSave('kn'+ki,()=>{
+        if(!notesDB.kingdoms[ki])notesDB.kingdoms[ki]={};
+        notesDB.kingdoms[ki].name=inp.value.trim()||null;
+        flashBadge(document.getElementById(`cd-k-ok-${ki}`));
+        buildKingdomsList();
+      });
+    });
+  });
+  sec.querySelectorAll('.cd-knote').forEach(ta=>{
+    ta.addEventListener('input',()=>{
+      const ki=+ta.dataset.ki;
+      cdSave('knt'+ki,()=>{
+        if(!notesDB.kingdoms[ki])notesDB.kingdoms[ki]={};
+        notesDB.kingdoms[ki].note=ta.value;
+        flashBadge(document.getElementById(`cd-kn-ok-${ki}`));
+      });
+    });
+  });
+}
+
+/* ── Tab: Cities ── */
+function buildCodexCities(){
+  const sec=document.getElementById('np-cities'); if(!sec)return;
+  if(!cities.length){ sec.innerHTML='<div class="np-empty-msg">No cities yet.<br>Generate a world first.</div>'; return; }
+  // Group by kingdom
+  let html=`<div class="np-sh">🏛 Cities &amp; Settlements</div>`;
+  for(const[ki,kg]of kingdoms.entries()){
+    const col=`rgb(${kg.r},${kg.g},${kg.b})`;
+    const kCities=cities.map((c,i)=>({c,i})).filter(({c})=>c.kingdomIdx===ki);
+    html+=`<div class="np-sh np-sh-k" style="color:${col};margin-top:18px"><div class="np-dot" style="background:${col};display:inline-block;margin-right:6px;border-radius:50%"></div>${escH(kg.fullName)}</div>`;
+    for(const{c,i:ci}of kCities){
+      const dn=getCDN(ci), cn=notesDB.cities[ci]?.note||'';
+      html+=`<div class="np-card" id="cd-ci-${ci}" style="margin-left:8px">
+        <div class="np-card-hd">${c.isCapital?'★ ':''}<span>${escH(c.name)}</span>${c.isCapital?'<span style="font-size:.5rem;color:var(--gold);letter-spacing:.1em;margin-left:6px">CAPITAL</span>':''}</div>
+        <div class="np-row">
+          <span class="np-label">Name</span>
+          <input class="np-input cd-cname" data-ci="${ci}" value="${escH(dn)}" maxlength="48" placeholder="${escH(c.name)}"/>
+          <span class="np-badge" id="cd-c-ok-${ci}">✓ Saved</span>
+        </div>
+        <div class="np-km-sub" style="margin-bottom:8px">Coords: (${c.x}, ${c.y}) · Biome: ${BIOMES[biomeGrid[c.y*GRID_W+c.x]]?.label||'?'}</div>
+        <textarea class="np-textarea cd-cnote" data-ci="${ci}" placeholder="Notes about ${escH(c.name)}…">${escH(cn)}</textarea>
+        <span class="np-badge-r" id="cd-cn-ok-${ci}">✓ Saved</span>
+      </div>`;
+    }
+  }
+  sec.innerHTML=html;
+  sec.querySelectorAll('.cd-cname').forEach(inp=>{
+    inp.addEventListener('input',()=>{
+      const ci=+inp.dataset.ci;
+      cdSave('cn'+ci,()=>{
+        if(!notesDB.cities[ci])notesDB.cities[ci]={};
+        notesDB.cities[ci].name=inp.value.trim()||null;
+        flashBadge(document.getElementById(`cd-c-ok-${ci}`));
+        // Update city name in render immediately
+        applyCustomNames(); renderCivilizations(); buildTerrainCache(); renderAll();
+      });
+    });
+  });
+  sec.querySelectorAll('.cd-cnote').forEach(ta=>{
+    ta.addEventListener('input',()=>{
+      const ci=+ta.dataset.ci;
+      cdSave('cnt'+ci,()=>{
+        if(!notesDB.cities[ci])notesDB.cities[ci]={};
+        notesDB.cities[ci].note=ta.value;
+        flashBadge(document.getElementById(`cd-cn-ok-${ci}`));
+      });
+    });
+  });
+}
+
+/* ── Tab: Map Pins ── */
+function buildCodexPins(){
+  const sec=document.getElementById('np-pins'); if(!sec)return;
+  const pins=Object.entries(notesDB.tiles||{}).filter(([,p])=>p.note||p.title);
+  if(!pins.length){
+    sec.innerHTML=`<div class="np-sh">📍 Map Pins</div><div class="np-empty-msg">No notes pinned yet.<br>Click any tile on the map, then write a note in the<br>Inspector panel to create a pin.</div>`;
+    return;
+  }
+  let html=`<div class="np-sh">📍 Map Pins <span style="font-size:.5rem;color:var(--text-dim);letter-spacing:.1em">(${pins.length} pin${pins.length!==1?'s':''})</span></div>`;
+  for(const[key,pin]of pins){
+    const[ptx,pty]=key.split(',').map(Number);
+    const bio=elevGrid?BIOMES[biomeGrid[pty*GRID_W+ptx]]?.label||'?':'?';
+    const ki=territoryGrid?territoryGrid[pty*GRID_W+ptx]:-1;
+    const kgName=ki>=0?kingdoms[ki]?.name:'';
+    html+=`<div class="np-card" id="cd-pin-${key.replace(',','-')}">
+      <div class="np-pin-hd">
+        <div>
+          <div class="np-pin-coords">X:${String(ptx).padStart(3,'0')} Y:${String(pty).padStart(3,'0')}</div>
+          <div class="np-pin-bio">${bio}${kgName?' · '+escH(kgName):''}</div>
+        </div>
+        <button class="np-del" data-pin-key="${key}">✕ Remove</button>
+      </div>
+      <div class="np-row">
+        <span class="np-label">Title</span>
+        <input class="np-input cd-ptitle" data-key="${key}" value="${escH(pin.title||'')}" maxlength="48" placeholder="Pin title…"/>
+      </div>
+      <textarea class="np-textarea cd-pnote" data-key="${key}" placeholder="Notes for this location…">${escH(pin.note||'')}</textarea>
+      <span class="np-badge-r" id="cd-pn-ok-${key.replace(',','-')}">✓ Saved</span>
+    </div>`;
+  }
+  sec.innerHTML=html;
+  sec.querySelectorAll('.cd-ptitle').forEach(inp=>{
+    inp.addEventListener('input',()=>{
+      const k=inp.dataset.key, [x,y]=k.split(',').map(Number);
+      const cur=notesDB.tiles[k]||{};
+      cdSave('pt'+k,()=>{ setTileNote(x,y,cur.note||'',inp.value); flashBadge(document.getElementById(`cd-pn-ok-${k.replace(',','-')}`)); });
+    });
+  });
+  sec.querySelectorAll('.cd-pnote').forEach(ta=>{
+    ta.addEventListener('input',()=>{
+      const k=ta.dataset.key, [x,y]=k.split(',').map(Number);
+      const cur=notesDB.tiles[k]||{};
+      cdSave('pn'+k,()=>{ setTileNote(x,y,ta.value,cur.title||''); flashBadge(document.getElementById(`cd-pn-ok-${k.replace(',','-')}`)); });
+    });
+  });
+  sec.querySelectorAll('.np-del').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const k=btn.dataset.pinKey, [x,y]=k.split(',').map(Number);
+      setTileNote(x,y,'',''); buildCodexPins(); renderCivilizations(); renderMinimap();
+    });
+  });
+}
+
+function buildCodexAll(){
+  buildCodexWorld(); buildCodexKingdoms(); buildCodexCities(); buildCodexPins();
+}
+
+/* ── Codex events ── */
+document.getElementById('np-close').addEventListener('click', closeCodex);
+notesPage.querySelectorAll('.np-tab').forEach(tab=>{
+  tab.addEventListener('click',()=>{
+    const t=tab.dataset.tab;
+    notesPage.querySelectorAll('.np-tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===t));
+    notesPage.querySelectorAll('.np-section').forEach(s=>s.classList.toggle('active',s.id===`np-${t}`));
+    // Rebuild that section on each tab click so it's fresh
+    if(t==='world')buildCodexWorld();
+    else if(t==='kingdoms')buildCodexKingdoms();
+    else if(t==='cities')buildCodexCities();
+    else if(t==='pins')buildCodexPins();
+  });
+});
+document.getElementById('btn-codex').addEventListener('click',()=>openCodex('world'));
+
+/* Escape key closes codex */
+document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&notesPage.classList.contains('open')) closeCodex();
+});
+
+/* Resize */
+let resizeT;
+window.addEventListener('resize',()=>{clearTimeout(resizeT);resizeT=setTimeout(()=>{resizeCvs();renderAll();},140);});
+
+/* ── §25  INIT ── */
+generate();
+
+</script>
+
+</body>
+</html>
